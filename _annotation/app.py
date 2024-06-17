@@ -289,7 +289,7 @@ def predict():
     detected_polygons = [polygon for polygon in matchesAll if polygon["label"] == "detected"]
     labeled_polygons = [polygon for polygon in matchesAll if polygon["label"] == "a"]
     iou = aggregate_iou(detected_polygons, labeled_polygons)
-    results = {"IoU": iou}
+    results = {"IoU": iou}             
     app.logger.info(f"IoU: {results}") # does not work...
     try:
         with open('results.json', 'w') as f:
@@ -312,7 +312,6 @@ def submit_polygons():
       return redirect('/')  
       #return redirect(url_for('/'))
     
-
 if __name__ == '__main__':
     app.run(debug=True)
 
