@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Image Annotation Tool</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<div id="imageContainer">
+    <canvas id="annotationCanvas"></canvas>
+</div>
+<div>
+  <form id="polygonsForm">   
+      <button id="submitPolygonsBtn" onclick="submitPolygons()">Save</button>
+      <button id="predictBtn" onclick="predictFunction()">Predict</button>
+  </form>
+  <button id="changeUrlBtn">new-page</button>
+
+</div>
+    <script>
+        // Embed Python 'polygons' variable into JavaScript using Jinja2
+        let polygons = {{ polygons | tojson }};
+        polygons.push({points: [], label: ''}); // Initialize new polygon
+    </script>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    
+
+
+</body>
+</html>

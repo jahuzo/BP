@@ -1,0 +1,189 @@
+document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('annotationCanvas');
+    const ctx = canvas.getContext('2d');
+    const image = new Image();
+    image.src = 'static/1.jpg'; // Ensure the path to your image is correct
+
+    let scale = 1;
+    const scaleMultiplier = 0.1;
+    let imgPosition = { x: 0, y: 0 };
+    let isDragging = false;
+    let dragStart = { x: 0, y: 0 };
+
+    let isPointDragging = false;
+    let draggedPoint = { polygonIndex: -1, pointIndex: -1 };
+    let selectedPolygonIndex = -1; // -1 means no selection
+
+    image.onload = () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        drawImage();
+    };
+
+    function drawImage() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, imgPosition.x, imgPosition.y, image.width * scale, image.height * scale);
+        drawPolygons();
+    }
+
+    function drawPolygons() {
+        polygons.forEach((polygonObj, polygonIdx) => {
+            const polygon = polygonObj.points;
+            if (polygon.length > 1) {
+                ctx.beginPath();
+                ctx.moveTo((polygon[0].x * scale) + imgPosition.x, (polygon[0].y * scale) + imgPosition.y);
+                polygon.forEach(point => {
+                    ctx.lineTo((point.x * scale) + imgPosition.x, (point.y * scale) + imgPosition.y);
+                });
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(128, 128, 128, 0.5)';
+                ctx.fill();
+                ctx.stroke();
+
+                // Draw points and label if the polygon is selected
+                if (selectedPolygonIndex === polygonIdx) {
+                    polygon.forEach((point, pointIdx) => {
+                        ctx.beginPath();
+                        ctx.arc((point.x * scale) + imgPosition.x, (point.y * scale) + imgPosition.y, 5, 0, 2 * Math.PI);
+                        ctx.fillStyle = isPointDragging && draggedPoint.polygonIndex === polygonIdx && draggedPoint.pointIndex === pointIdx ? 'red' : 'yellow';
+                        ctx.fill();
+                    });
+                }
+
+                // Draw label if it exists
+                if (polygonObj.label) {
+                    ctx.font = '16px Arial';
+                    ctx.fillStyle = 'black';
+                    ctx.fillText(polygonObj.label, (polygon[0].x * scale) + imgPosition.x, (polygon[0].y * scale) + imgPosition.y - 10);
+                }
+            }
+        });
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        if (e.button === 0) { // Left mouse button
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = (e.clientX - rect.left - imgPosition.x) / scale;
+            const mouseY = (e.clientY - rect.top - imgPosition.y) / scale;
+            
+            // Check if a point is clicked
+            let pointFound = false;
+            polygons.forEach((polygonObj, polygonIdx) => {
+                polygonObj.points.forEach((point, pointIndex) => {
+                    const distance = Math.sqrt((point.x - mouseX) ** 2 + (point.y - mouseY) ** 2);
+                    if (distance < 5 / scale) {
+                        isPointDragging = true;
+                        draggedPoint = { polygonIndex: polygonIdx, pointIndex };
+                        pointFound = true;
+                        selectedPolygonIndex = polygonIdx; // Select this polygon
+                        e.preventDefault();
+                        return;
+                    }
+                });
+                if (pointFound) return;
+            });
+
+            if (!pointFound) {
+                // Check if a polygon is clicked
+                let polygonClicked = false;
+                polygons.forEach((polygonObj, polygonIdx) => {
+                    if (ctx.isPointInPath(mouseX, mouseY)) {
+                        selectedPolygonIndex = polygonIdx; // Select this polygon
+                        polygonClicked = true;
+                        return;
+                    }
+                });
+
+                if (!polygonClicked) {
+                    selectedPolygonIndex = -1; // Deselect all polygons
+                }
+                drawImage(); // Redraw to reflect selection changes
+            }
+        }
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+          e.preventDefault();
+          imgPosition.x = e.clientX - dragStart.x;
+          imgPosition.y = e.clientY - dragStart.y;
+          drawImage();
+      } else if (isPointDragging) {
+          const rect = canvas.getBoundingClientRect();
+          const mouseX = (e.clientX - rect.left - imgPosition.x) / scale;
+          const mouseY = (e.clientY - rect.top - imgPosition.y) / scale;
+  
+          // Update the dragged point's position
+          polygons[draggedPoint.polygonIndex].points[draggedPoint.pointIndex] = { x: mouseX, y: mouseY };
+          drawImage();
+      }
+  });
+  
+  canvas.addEventListener('mouseup', (e) => {
+      if (e.button === 0) { // Left mouse button
+          isDragging = false;
+          if (isPointDragging) {
+              isPointDragging = false;
+              draggedPoint = { polygonIndex: -1, pointIndex: -1 };
+              drawImage();
+          }
+      }
+  });
+  
+  canvas.addEventListener('dblclick', (e) => {
+      if (selectedPolygonIndex !== -1 && polygons[selectedPolygonIndex].points.length > 2) {
+          // If a polygon is selected and has more than two points, consider it complete and reset selection
+          selectedPolygonIndex = -1; // Deselect polygon
+          polygons.push({ points: [], label: '' }); // Prepare for a new polygon
+          drawImage();
+      }
+  });
+  
+  document.addEventListener('keydown', (e) => {
+      // Example functionality: assign label 'a' to the selected polygon
+      if (e.key === "a" && selectedPolygonIndex !== -1) {
+          polygons[selectedPolygonIndex].label = 'a';
+          drawImage();
+      }
+  });
+  
+  // Additional functionality to drag the entire polygon
+  canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 2 && selectedPolygonIndex !== -1) { // Right mouse button
+          isDragging = true;
+          dragStart.x = e.clientX;
+          dragStart.y = e.clientY;
+      }
+  });
+  
+  canvas.addEventListener('mousemove', (e) => {
+      if (isDragging && selectedPolygonIndex !== -1) {
+          e.preventDefault();
+          const rect = canvas.getBoundingClientRect();
+          const dx = (e.clientX - dragStart.x) / scale;
+          const dy = (e.clientY - dragStart.y) / scale;
+  
+          polygons[selectedPolygonIndex].points = polygons[selectedPolygonIndex].points.map(p => ({
+              x: p.x + dx,
+              y: p.y + dy
+          }));
+  
+          dragStart.x = e.clientX;
+          dragStart.y = e.clientY;
+  
+          drawImage();
+      }
+  });
+  
+  canvas.addEventListener('mouseup', (e) => {
+      if (e.button === 2 && selectedPolygonIndex !== -1) { // Right mouse button
+          isDragging = false;
+      }
+  });
+  
+  // Prevent the context menu from appearing on right-click
+  canvas.oncontextmenu = (e) => {
+      e.preventDefault();
+  };
+
+});
