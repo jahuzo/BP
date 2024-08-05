@@ -12,6 +12,19 @@ import os
 
 logging.basicConfig(level=logging.DEBUG)
 
+def jump_to_script_directory():
+    # Get the directory of the current script
+    script_directory =  'C:/Users/NB/OneDrive/BP/_annotation/' #make machine independent!
+    
+    try:
+        # Change the current working directory to the script's directory
+        os.chdir(script_directory)
+        print(f"Successfully changed the directory to the script's directory: {os.getcwd()}")
+    except Exception as e:
+        print(f"An error occurred while changing the directory: {e}")
+
+jump_to_script_directory()
+
 def optimize_polygon(polygons):
     optimized_polygons = []
 
@@ -290,7 +303,6 @@ def predict():
     labeled_polygons = [polygon for polygon in matchesAll if polygon["label"] == "a"]
     iou = aggregate_iou(detected_polygons, labeled_polygons)
     results = {"IoU": iou}             
-    app.logger.info(f"IoU: {results}") # does not work...
     try:
         with open('results.json', 'w') as f:
             json.dump(results, f, indent=4)
