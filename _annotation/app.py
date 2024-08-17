@@ -2,6 +2,7 @@ from flask import redirect, url_for
 from flask import Flask, render_template
 from flask import request, jsonify
 from flask import Response
+from prettytable import PrettyTable
 import logging
 import json
          
@@ -271,9 +272,6 @@ def compute_iou(polygon1, polygon2):
     union_area = 0  # Placeholder for union area calculation
     iou = intersection_area / union_area if union_area != 0 else 0
     return iou
-    return new_polygons
-    
-    return new_polygons
 
 def compute_iou(polygon1, polygon2):
     # Calculate the intersection area
@@ -349,6 +347,29 @@ def hello_world():
     # Render the hello.html template
     return render_template('index.html', polygons=polygons)
 
+def stat_calc(matchesAll):
+    #IoU
+    detected_polygons = [polygon for polygon in matchesAll if polygon["label"] == "detected"]
+    labeled_polygons = [polygon for polygon in matchesAll if polygon["label"] == "a"]
+    iou = aggregate_iou(detected_polygons, labeled_polygons)
+    #FPR
+    #fpr = fp/(fp+tn)
+
+    #TPR
+    #tpr = tp/(tp+fn)
+
+    #Precision
+    #prec = tp/(tp+fp)
+    
+    #Accuracy
+    #acc = (tp+tn)/(tp+tn+fp+fn)
+    
+    #Recall
+    #rec = tp/(tp+fn)
+    
+    #return iou, fpr, tpr, prec, acc, rec
+    return iou
+
 @app.route('/predict')
 def predict():
     
@@ -357,7 +378,7 @@ def predict():
         #print_structure(polygons)
         
         # Open the source image
-        source_img_path = os.path.join("static", "1.jpg")
+        source_img_path = os.path.join("static", "001.jpg")
         source_img = Image.open(source_img_path)
     
         matchesAll = []    
@@ -396,7 +417,7 @@ def predict():
             draw.polygon(polygon_points, outline="red")
             
             # Load the image from the path
-            image_path = "static/1.jpg"
+            image_path = "static/001.jpg"
             reference = Image.open(image_path)
             
             matches = find_matches(reference, img, polygons, 50)
@@ -410,21 +431,16 @@ def predict():
     distance_threshold = 10  # Define the minimum distance between polygon centers
     matchesAll = filter_polygons(matchesAll, distance_threshold)
     #matchesAll = optimize_polygon(matchesAll)
-           
+    
+    iou = stat_calc(matchesAll) #iou, fpr, tpr, prec, acc, rec = stat_calc(matchesAll)
     # Save the data
     with open('polygons.json', 'w') as f:
         json.dump(matchesAll, f, indent=4)
-        
-    # Compute IoU and store it in results.json
-    detected_polygons = [polygon for polygon in matchesAll if polygon["label"] == "detected"]
-    labeled_polygons = [polygon for polygon in matchesAll if polygon["label"] == "a"]
-    iou = aggregate_iou(detected_polygons, labeled_polygons)
-    results = {"IoU": iou}             
-    try:
-        with open('results.json', 'w') as f:
-            json.dump(results, f, indent=4)
-    except Exception as e:
-        print(f"Error writing to JSON: {e}")
+              
+    resTable = PrettyTable(["IoU", "FPR", "TPR", "Precision", "Accuracy", "Recall"])
+    resTable.add_row([iou, 0, 0, 0, 0])
+    
+    print(resTable)
 
 @app.route('/submit-polygons', methods=['POST'])
 def submit_polygons():
@@ -440,7 +456,31 @@ def submit_polygons():
   
       return redirect('/')  
       #return redirect(url_for('/'))
-    
+
+@app.route('/change', methods=['POST'])
+def change():
+    # Get the filename from the request
+    filename = request.form.get('filename')
+
+    # Get the directory of the current file
+    current_directory = os.path.dirname(filename)
+
+    # Get the list of files in the current directory
+    files = os.listdir(current_directory)
+
+    # Find the index of the current file
+    current_index = files.index(os.path.basename(filename))
+
+    # Calculate the index of the next file
+    next_index = (current_index + 1) % len(files)
+
+    # Get the path of the next file
+    next_file = os.path.join(current_directory, files[next_index])
+
+    # Load polygons from the next file
+    load_polygons(next_file)
+
+    return redirect('/')
 if __name__ == '__main__':
     app.run(debug=True)
 

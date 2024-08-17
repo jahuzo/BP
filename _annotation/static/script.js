@@ -20,7 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('annotationCanvas');
     const ctx = canvas.getContext('2d');
     const image = new Image();
-    image.src = 'static/1.jpg'; // Make sure the path to your image is correct
+    image.src = 'static/001.jpg'; // Make sure the path to your image is correct, NEEDS TO BE PORTABLE!!!
 
     let scale = 1;
     const scaleMultiplier = 0.1;
