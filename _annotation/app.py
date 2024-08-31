@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 def jump_to_script_directory():
     # Get the directory of the current script
-    script_directory =  'C:/Users/NB/OneDrive/BP/_annotation/' #make machine independent!
+    script_directory = os.path.dirname(os.path.abspath(__file__))
     
     try:
         # Change the current working directory to the script's directory
