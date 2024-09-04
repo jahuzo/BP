@@ -1,3 +1,4 @@
+from operator import index
 from flask import redirect, url_for
 from flask import Flask, render_template
 from flask import request, jsonify
@@ -25,6 +26,33 @@ def jump_to_script_directory():
         print(f"An error occurred while changing the directory: {e}")
 
 jump_to_script_directory()
+
+doc_dir = 'static'
+doc_index = os.path.join(doc_dir, 'index.json')
+
+def load_index():
+    with open(doc_index, 'r') as f:
+        return json.load(f)
+
+def get_doc(doc_id):
+    index = load_index()
+    document = next((doc for doc in index['documents'] if doc['id'] == doc_id), None)
+    
+    if document:
+        # Serve the image and polygon data for the selected document
+        image_path = document['image_path']
+        json_path = document['json_path']
+        
+        with open(json_path, 'r') as f:
+            polygons = json.load(f)
+        
+        return jsonify({
+            'image': image_path,
+            'polygons': polygons,
+            'current_page': document['current_page']
+        })
+    else:
+        return jsonify({'error': 'Document not found'}), 404
 
 def optimize_polygon(polygons):
     optimized_polygons = []
@@ -155,220 +183,20 @@ def find_matches(img, template, polygons, min_distance):
             ]
         })
     
-def load_polygons(json_path):
-    with open(json_path, 'r') as file:
-        polygons = json.load(file)
+def load_polygons(folder_name, filename='polygons.json'):
+    file_path = os.path.join('static', folder_name, filename)
+    with open(file_path, 'r') as f:
+        polygons = json.load(f)
     return polygons
 
-def extract_region(img, polygon):
-    # Create a mask for the polygon
-    mask = np.zeros(img.shape[:2], dtype=np.uint8)
-    points = np.array([[point['x'], point['y']] for point in polygon['points']], dtype=np.int32)
-    cv2.fillPoly(mask, [points], 255)
-    
-    # Extract the region using the mask
-    region = cv2.bitwise_and(img, img, mask=mask)
-    return region
-
-def non_max_suppression(boxes, overlapThresh):
-    if len(boxes) == 0:
-        return []
-
-    if boxes.dtype.kind == "i":
-        boxes = boxes.astype("float")
-
-    pick = []
-    x1 = boxes[:,0]
-    y1 = boxes[:,1]
-    x2 = boxes[:,2]
-    y2 = boxes[:,3]
-
-    area = (x2 - x1 + 1) * (y2 - y1 + 1)
-    idxs = np.argsort(y2)
-
-    while len(idxs) > 0:
-        last = len(idxs) - 1
-        i = idxs[last]
-        pick.append(i)
-
-        xx1 = np.maximum(x1[i], x1[idxs[:last]])
-        yy1 = np.maximum(y1[i], y1[idxs[:last]])
-        xx2 = np.minimum(x2[i], x2[idxs[:last]])
-        yy2 = np.minimum(y2[i], y2[idxs[:last]])
-
-        w = np.maximum(0, xx2 - xx1 + 1)
-        h = np.maximum(0, yy2 - yy1 + 1)
-
-        overlap = (w * h) / area[idxs[:last]]
-
-        idxs = np.delete(idxs, np.concatenate(([last], np.where(overlap > overlapThresh)[0])))
-
-    return boxes[pick].astype("int")
-
-def find_matches(img, template, json_path, min_distance):
-    # Load user-created polygons from JSON file
-    polygons = load_polygons(json_path)
-    
-    # Convert PIL images to NumPy arrays for OpenCV processing
-    img_np = np.array(img)
-    template_np = np.array(template)
-
-    # Convert to grayscale
-    img_gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
-    template_gray = cv2.cvtColor(template_np, cv2.COLOR_BGR2GRAY)
-    
-    # Apply Gaussian blur to reduce noise and improve matching accuracy
-    img_gray = cv2.GaussianBlur(img_gray, (5, 5), 0)
-    template_gray = cv2.GaussianBlur(template_gray, (5, 5), 0)
-    
-    new_polygons = []
-    boxes = []
-    
-    for polygon in polygons:
-        # Extract the region defined by the polygon
-        region = extract_region(img_np, polygon)
-        region_gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-        
-        # Perform template matching within the region
-        res = cv2.matchTemplate(region_gray, template_gray, cv2.TM_CCORR_NORMED)
-        
-        # Set a threshold for detecting matches
-        threshold = 0.7  # Adjusted threshold for better accuracy
-        loc = np.where(res >= threshold)
-        
-        for pt in zip(*loc[::-1]):  # loc gives us the top-left corner of the match
-            match_center = (pt[0] + template_np.shape[1]//2, pt[1] + template_np.shape[0]//2)  # Calculate match center
-            # Add to boxes list for non-maximum suppression
-            boxes.append([pt[0], pt[1], pt[0] + template_np.shape[1], pt[1] + template_np.shape[0]])
-    
-    # Apply non-maximum suppression to filter out overlapping detections
-    boxes = np.array(boxes)
-    boxes = non_max_suppression(boxes, 0.3)
-    
-    for (x1, y1, x2, y2) in boxes:
-        new_polygons.append({
-            "label": "detected",
-            "points": [
-                {"x": int(x1), "y": int(y1)},
-                {"x": int(x2), "y": int(y1)},
-                {"x": int(x2), "y": int(y2)},
-                {"x": int(x1), "y": int(y2)}
-            ]
-        })
-    
-    return new_polygons
-
-def compute_iou(polygon1, polygon2):
-    # Calculate the intersection area
-    intersection_area = 0
-    for i in range(len(polygon1['points'])):
-        for j in range(len(polygon2['points'])):
-            x1, y1 = polygon1['points'][i]['x'], polygon1['points'][i]['y']
-            x2, y2 = polygon2['points'][j]['x'], polygon2['points'][j]['y']
-            # Implement intersection area calculation here
-            # This is a placeholder for the actual intersection logic
-            pass
-    # Calculate the union area
-    union_area = 0  # Placeholder for union area calculation
-    iou = intersection_area / union_area if union_area != 0 else 0
-    return iou
-
-def compute_iou(polygon1, polygon2):
-    # Calculate the intersection area
-    intersection_area = 0
-    for i in range(len(polygon1['points'])):
-        for j in range(len(polygon2['points'])):
-            x1, y1 = polygon1['points'][i]['x'], polygon1['points'][i]['y']
-            x2, y2 = polygon1['points'][(i + 1) % len(polygon1['points'])]['x'], polygon1['points'][(i + 1) % len(polygon1['points'])]['y']
-            x3, y3 = polygon2['points'][j]['x'], polygon2['points'][j]['y']
-            x4, y4 = polygon2['points'][(j + 1) % len(polygon2['points'])]['x'], polygon2['points'][(j + 1) % len(polygon2['points'])]['y']
-            
-            intersection_area += compute_intersection_area(x1, y1, x2, y2, x3, y3, x4, y4)
-    
-    # Calculate the union area
-    polygon1_area = calculate_polygon_area(polygon1)
-    polygon2_area = calculate_polygon_area(polygon2)
-    union_area = polygon1_area + polygon2_area - intersection_area
-    
-    # Calculate the IoU
-    iou = intersection_area / union_area if union_area != 0 else 0
-    return iou
-
-def compute_intersection_area(x1, y1, x2, y2, x3, y3, x4, y4):
-    # Calculate the intersection area between two line segments
-    x = max(min(x1, x2), min(x3, x4))
-    y = max(min(y1, y2), min(y3, y4))
-    w = min(max(x1, x2), max(x3, x4)) - x
-    h = min(max(y1, y2), max(y3, y4)) - y
-    if w < 0 or h < 0:
-        return 0
-    return w * h
-
-def calculate_polygon_area(polygon):
-    # Calculate the area of a polygon using the shoelace formula
-    area = 0
-    for i in range(len(polygon['points'])):
-        x1, y1 = polygon['points'][i]['x'], polygon['points'][i]['y']
-        x2, y2 = polygon['points'][(i + 1) % len(polygon['points'])]['x'], polygon['points'][(i + 1) % len(polygon['points'])]['y']
-        area += (x1 * y2 - x2 * y1)
-    return abs(area) / 2
-
-def aggregate_iou(detected_polygons, labeled_polygons): # compares each detected polygon with each labeled polygon
-    iou_values = []
-    for d_polygon in detected_polygons:
-        best_iou = 0
-        for l_polygon in labeled_polygons:
-            iou = compute_iou(d_polygon, l_polygon)
-            if iou > best_iou:
-                best_iou = iou
-        iou_values.append(best_iou)
-    
-    # Calculate the average IoU if there are any IoU values, else return 0
-    return np.mean(iou_values) if iou_values else 0
 
 app = Flask(__name__)
-
 @app.route('/')
 def hello_world():
 
-    with open('polygons.json', 'r') as f:
-        polygons = json.load(f)
-    
-
-    #polygons = [
-    #  {"points": [{"x": 100, "y": 10}, {"x": 60, "y": 10}, {"x": 60, "y": 60}, {"x": 10, "y": 60}], "label": "a"},
-    #  {"points": [{"x": 700, "y": 70}, {"x": 120, "y": 70}, {"x": 120, "y": 120}, {"x": 70, "y": 120}], "label": "n"},
-    #  {"points": [{"x": 130, "y": 130}, {"x": 180, "y": 130}, {"x": 180, "y": 180}, {"x": 130, "y": 180}], "label": "a"},
-    #  {"points": [], "label": ""}
-    #]
-    
-    
-
-    # Render the hello.html template
-    return render_template('index.html', polygons=polygons)
-
-def stat_calc(matchesAll):
-    #IoU
-    detected_polygons = [polygon for polygon in matchesAll if polygon["label"] == "detected"]
-    labeled_polygons = [polygon for polygon in matchesAll if polygon["label"] == "a"]
-    iou = aggregate_iou(detected_polygons, labeled_polygons)
-    #FPR
-    #fpr = fp/(fp+tn)
-
-    #TPR
-    #tpr = tp/(tp+fn)
-
-    #Precision
-    #prec = tp/(tp+fp)
-    
-    #Accuracy
-    #acc = (tp+tn)/(tp+tn+fp+fn)
-    
-    #Recall
-    #rec = tp/(tp+fn)
-    
-    #return iou, fpr, tpr, prec, acc, rec
-    return iou
+    cur_dir = request.args.get('folder', 'default_folder')  
+    polygons = load_polygons(cur_dir)
+    return render_template('index.html', polygons=polygons, folder_name=cur_dir)
 
 @app.route('/predict')
 def predict():
@@ -432,15 +260,6 @@ def predict():
     matchesAll = filter_polygons(matchesAll, distance_threshold)
     #matchesAll = optimize_polygon(matchesAll)
     
-    iou = stat_calc(matchesAll) #iou, fpr, tpr, prec, acc, rec = stat_calc(matchesAll)
-    # Save the data
-    with open('polygons.json', 'w') as f:
-        json.dump(matchesAll, f, indent=4)
-              
-    resTable = PrettyTable(["IoU", "FPR", "TPR", "Precision", "Accuracy", "Recall"])
-    resTable.add_row([iou, 0, 0, 0, 0])
-    
-    print(resTable)
 
 @app.route('/submit-polygons', methods=['POST'])
 def submit_polygons():
@@ -459,14 +278,14 @@ def submit_polygons():
 
 @app.route('/change', methods=['POST'])
 def change():
-    # Get the filename from the request
+    # Get the current filename from the request
     filename = request.form.get('filename')
 
     # Get the directory of the current file
     current_directory = os.path.dirname(filename)
 
     # Get the list of files in the current directory
-    files = os.listdir(current_directory)
+    files = [f for f in os.listdir(current_directory) if f.endswith('.json')]  # Only consider JSON files
 
     # Find the index of the current file
     current_index = files.index(os.path.basename(filename))
@@ -477,10 +296,9 @@ def change():
     # Get the path of the next file
     next_file = os.path.join(current_directory, files[next_index])
 
-    # Load polygons from the next file
-    load_polygons(next_file)
+    return redirect(url_for('hello_world', filename=next_file))  # Pass the next filename when redirecting
 
-    return redirect('/')
+
 if __name__ == '__main__':
     app.run(debug=True)
 
