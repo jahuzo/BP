@@ -20,23 +20,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('annotationCanvas');
     const ctx = canvas.getContext('2d');
     const image = new Image();
-    image.src = 'static/001.jpg'; // Make sure the path to your image is correct, NEEDS TO BE PORTABLE!!!
+    image.src = '/static/001/image.jpg'; // Path to the image;
 
     let scale = 1;
     const scaleMultiplier = 0.1;
     let imgPosition = { x: 0, y: 0 };
     let isDragging = false;
     let dragStart = { x: 0, y: 0 };
-
-
     let isPointDragging = false;
     let draggedPoint = { polygonIndex: -1, pointIndex: -1 };
 
-    image.onload = () => {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        drawImage();
-    };
 
     function drawImage() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);

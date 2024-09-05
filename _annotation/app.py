@@ -14,6 +14,12 @@ import os
 
 logging.basicConfig(level=logging.DEBUG)
 
+# IMPORTANT VARIABLES
+
+static_path = 'C:/Users/jahuz/Links/BP/_annotation/static'
+dir_path = '001'
+cur_dir = static_path+'/'+dir_path
+
 def jump_to_script_directory():
     # Get the directory of the current script
     script_directory = os.path.dirname(os.path.abspath(__file__))
@@ -183,20 +189,19 @@ def find_matches(img, template, polygons, min_distance):
             ]
         })
     
-def load_polygons(folder_name, filename='polygons.json'):
-    file_path = os.path.join('static', folder_name, filename)
+def load_polygons(folder_name, filename):
+    file_path = os.path.join(folder_name, filename) 
     with open(file_path, 'r') as f:
         polygons = json.load(f)
     return polygons
 
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', static_url_path= '/static'  , template_folder='templates')
 @app.route('/')
 def hello_world():
 
-    cur_dir = request.args.get('folder', 'default_folder')  
-    polygons = load_polygons(cur_dir)
-    return render_template('index.html', polygons=polygons, folder_name=cur_dir)
+    polygons = load_polygons(cur_dir, 'polygons.json')
+    return render_template('index.html', polygons=polygons, folder_name=cur_dir, cur_dir=cur_dir)
 
 @app.route('/predict')
 def predict():
@@ -206,7 +211,7 @@ def predict():
         #print_structure(polygons)
         
         # Open the source image
-        source_img_path = os.path.join("static", "001.jpg")
+        source_img_path = os.path.join(cur_dir, "image.jpg")
         source_img = Image.open(source_img_path)
     
         matchesAll = []    
@@ -245,7 +250,7 @@ def predict():
             draw.polygon(polygon_points, outline="red")
             
             # Load the image from the path
-            image_path = "static/001.jpg"
+            image_path = cur_dir+"/image.jpg"
             reference = Image.open(image_path)
             
             matches = find_matches(reference, img, polygons, 50)
