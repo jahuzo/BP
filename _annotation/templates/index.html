@@ -4,9 +4,7 @@
     <meta charset="UTF-8">
     <title>Image Annotation Tool</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <!--script>
-        var cur_dir = "{{ cur_dir }}";
-    </script-->
+
 </head>
 <body>
 
@@ -24,7 +22,6 @@
 </div>
     <script>
         // Embed Python 'polygons' and 'cur_dir' variable into JavaScript using Jinja2
-        const cur_dir = "{{ cur_dir }}";
 
         let polygons = {{ polygons | tojson }};
         polygons.push({points: [], label: ''}); // Initialize new polygon

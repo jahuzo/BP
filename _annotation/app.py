@@ -6,7 +6,7 @@ from flask import Response
 from prettytable import PrettyTable
 import logging
 import json
-         
+
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw
@@ -14,11 +14,7 @@ import os
 
 logging.basicConfig(level=logging.DEBUG)
 
-# IMPORTANT VARIABLES
-
-static_path = 'C:/Users/jahuz/Links/BP/_annotation/static'
-dir_path = '001'
-cur_dir = static_path+'/'+dir_path
+from paths import cur_dir, dir_path
 
 def jump_to_script_directory():
     # Get the directory of the current script
@@ -33,32 +29,6 @@ def jump_to_script_directory():
 
 jump_to_script_directory()
 
-doc_dir = 'static'
-doc_index = os.path.join(doc_dir, 'index.json')
-
-def load_index():
-    with open(doc_index, 'r') as f:
-        return json.load(f)
-
-def get_doc(doc_id):
-    index = load_index()
-    document = next((doc for doc in index['documents'] if doc['id'] == doc_id), None)
-    
-    if document:
-        # Serve the image and polygon data for the selected document
-        image_path = document['image_path']
-        json_path = document['json_path']
-        
-        with open(json_path, 'r') as f:
-            polygons = json.load(f)
-        
-        return jsonify({
-            'image': image_path,
-            'polygons': polygons,
-            'current_page': document['current_page']
-        })
-    else:
-        return jsonify({'error': 'Document not found'}), 404
 
 def optimize_polygon(polygons):
     optimized_polygons = []
@@ -189,9 +159,11 @@ def find_matches(img, template, polygons, min_distance):
             ]
         })
     
-def load_polygons(folder_name, filename):
-    file_path = os.path.join(folder_name, filename) 
-    with open(file_path, 'r') as f:
+    
+os.chdir(cur_dir)
+
+def load_polygons():
+    with open('polygons.json') as f:
         polygons = json.load(f)
     return polygons
 
@@ -200,8 +172,8 @@ app = Flask(__name__, static_folder='static', static_url_path= '/static'  , temp
 @app.route('/')
 def hello_world():
 
-    polygons = load_polygons(cur_dir, 'polygons.json')
-    return render_template('index.html', polygons=polygons, folder_name=cur_dir, cur_dir=cur_dir)
+    polygons = load_polygons()
+    return render_template('index.html', polygons=polygons)
 
 @app.route('/predict')
 def predict():

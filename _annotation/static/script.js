@@ -1,4 +1,4 @@
-//let polygons = [{points: [], label: ''}]; // Initialize with one polygon object
+let polygons = [{points: [], label: ''}]; // Initialize with one polygon object
 
 let currentPolygonIndex = polygons.length-1;
 
@@ -20,7 +20,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('annotationCanvas');
     const ctx = canvas.getContext('2d');
     const image = new Image();
-    image.src = '/static/001/image.jpg'; // Path to the image;
+
+    image.src = '/static/001/image.jpg'; // Path to the image
 
     let scale = 1;
     const scaleMultiplier = 0.1;
