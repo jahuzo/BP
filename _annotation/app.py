@@ -169,8 +169,8 @@ def find_matches(img, template, polygons, min_distance, scale_percent=50, thresh
     
 os.chdir(cur_dir)
 
-def load_polygons():
-    json_path = os.path.join(app.static_folder, '002', 'polygons.json')
+def load_polygons(dir_path):
+    json_path = os.path.join(app.static_folder, dir_path, 'polygons.json')
     
     if os.path.exists(json_path):
         with open(json_path, 'r') as f:
@@ -185,17 +185,8 @@ app = Flask(__name__, static_folder='static', static_url_path= '/static'  , temp
 @app.route('/')
 def index():
 
-    polygons = load_polygons()
+    polygons = load_polygons(dir_path)
     return render_template('index.html', polygons=polygons)
-
-@app.route('/get-polygons', methods=['GET'])
-def get_polygons():
-    try:
-        with open('polygons.json', 'r') as f:
-            polygons = json.load(f)
-        return jsonify(polygons)
-    except FileNotFoundError:
-        return jsonify([])
 
 @app.route('/predict')
 def predict():
@@ -261,7 +252,7 @@ def predict():
     
 
 @app.route('/submit-polygons', methods=['POST'])
-def submit_polygons():
+def submit_polygons(dir_path):
       # Parse the JSON data
       polygons = request.get_json()
       
@@ -269,7 +260,8 @@ def submit_polygons():
       polygons = [polygon for polygon in polygons if len(polygon["points"]) >= 3]
       
       # Save the data
-      with open('polygons.json', 'w') as f:
+      file_path = os.path.join(app.static_folder, dir_path, 'polygons.json')
+      with (file_path, 'polygons.json', 'w') as f:
           json.dump(polygons, f, indent=4)
   
       #return redirect('/')  
@@ -278,6 +270,4 @@ def submit_polygons():
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-
 
