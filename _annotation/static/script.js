@@ -1,4 +1,4 @@
-let polygons = [{points: [], label: ''}]; // Initialize with one polygon object
+//let polygons = [{points: [], label: ''}]; // Initialize with one polygon object
 
 let currentPolygonIndex = polygons.length-1;
 
@@ -17,20 +17,28 @@ function isClickedInsidePolygon(polygon, mouseX, mouseY) {
 
 
 document.addEventListener('DOMContentLoaded', () => {
+
     const canvas = document.getElementById('annotationCanvas');
     const ctx = canvas.getContext('2d');
     const image = new Image();
 
-    image.src = '/static/001/image.jpg'; // Path to the image
+    image.src = '/static/002/image.jpg'; // Set the image source
 
     let scale = 1;
     const scaleMultiplier = 0.1;
     let imgPosition = { x: 0, y: 0 };
     let isDragging = false;
     let dragStart = { x: 0, y: 0 };
+
+
     let isPointDragging = false;
     let draggedPoint = { polygonIndex: -1, pointIndex: -1 };
 
+    image.onload = () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        drawImage();
+    };
 
     function drawImage() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -38,7 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
         drawPolygons();
     }
 
- function drawPolygons() {
+function drawPolygons() {
     polygons.forEach((polygonObj, polygonIdx) => {
         const polygon = polygonObj.points;
         if (polygon.length > 1) {
@@ -55,7 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 ctx.fillStyle = 'rgba(155, 0, 0, 0.5)';            
             }
-            
+
             ctx.fill();
             ctx.stroke();
 
@@ -68,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ctx.fill();
                 });
             }
-            
+
             // Draw label if it exists
             if (polygonObj.label) {
                 ctx.font = '16px Arial';
@@ -245,8 +253,8 @@ function submitPolygons() {
     });
 }
 
-document.getElementById('changeUrlBtn').addEventListener('click', function() {
+/*document.getElementById('changeUrlBtn').addEventListener('click', function() {
     // Change the URL without reloading the page
     window.location.href = '/predict';
-});
+}); */
 

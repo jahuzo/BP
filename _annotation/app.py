@@ -129,7 +129,7 @@ def print_structure(var, indent=0):
         print(f"{prefix}{type(var)} with value {var}")
 
 
-def find_matches(img, template, polygons, min_distance):
+def find_matches(img, template, polygons, min_distance, scale_percent=50, threshold=0.8):  # migrate to baseline.py
     # Convert PIL images to NumPy arrays for OpenCV processing
     img_np = np.array(img)
     template_np = np.array(template)
@@ -138,42 +138,64 @@ def find_matches(img, template, polygons, min_distance):
     img_gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
     template_gray = cv2.cvtColor(template_np, cv2.COLOR_BGR2GRAY)
     
+    # Resize images for faster processing
+    width = int(img_gray.shape[1] * scale_percent / 100)
+    height = int(img_gray.shape[0] * scale_percent / 100)
+    dim = (width, height)
+
+    img_resized = cv2.resize(img_gray, dim, interpolation=cv2.INTER_AREA)
+    template_resized = cv2.resize(template_gray, dim, interpolation=cv2.INTER_AREA)
+
     # Perform template matching using cross-correlation
-    res = cv2.matchTemplate(img_gray, template_gray, cv2.TM_CCORR_NORMED)
+    res = cv2.matchTemplate(img_resized, template_resized, cv2.TM_CCORR_NORMED)
     
     # Set a threshold for detecting matches
-    threshold = 0.  # Adjusted threshold for better accuracy
     loc = np.where(res >= threshold)
     
     new_polygons = []
     for pt in zip(*loc[::-1]):  # loc gives us the top-left corner of the match
-        match_center = (pt[0] + template_np.shape[1]//2, pt[1] + template_np.shape[0]//2)  # Calculate match center
+        match_center = (pt[0] + template_resized.shape[1]//2, pt[1] + template_resized.shape[0]//2)  # Calculate match center
         # If far enough, add to new polygons list
         new_polygons.append({
             "label": "detected",
             "points": [
                 {"x": int(pt[0]), "y": int(pt[1])},
-                {"x": int(pt[0]) + int(template_np.shape[1]), "y": int(pt[1])},
-                {"x": int(pt[0]) + int(template_np.shape[1]), "y": int(pt[1] + template_np.shape[0])},
-                {"x": int(pt[0]), "y": int(pt[1] + template_np.shape[0])}
+                {"x": int(pt[0]) + int(template_resized.shape[1]), "y": int(pt[1])},
+                {"x": int(pt[0]) + int(template_resized.shape[1]), "y": int(pt[1] + template_resized.shape[0])},
+                {"x": int(pt[0]), "y": int(pt[1] + template_resized.shape[0])}
             ]
         })
-    
+
     
 os.chdir(cur_dir)
 
 def load_polygons():
-    with open('polygons.json') as f:
-        polygons = json.load(f)
+    json_path = os.path.join(app.static_folder, '002', 'polygons.json')
+    
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            polygons = json.load(f)
+    else:
+        polygons = []  # Return an empty list if the file does not exist
+
     return polygons
 
 
 app = Flask(__name__, static_folder='static', static_url_path= '/static'  , template_folder='templates')
 @app.route('/')
-def hello_world():
+def index():
 
     polygons = load_polygons()
     return render_template('index.html', polygons=polygons)
+
+@app.route('/get-polygons', methods=['GET'])
+def get_polygons():
+    try:
+        with open('polygons.json', 'r') as f:
+            polygons = json.load(f)
+        return jsonify(polygons)
+    except FileNotFoundError:
+        return jsonify([])
 
 @app.route('/predict')
 def predict():
@@ -250,30 +272,8 @@ def submit_polygons():
       with open('polygons.json', 'w') as f:
           json.dump(polygons, f, indent=4)
   
-      return redirect('/')  
-      #return redirect(url_for('/'))
-
-@app.route('/change', methods=['POST'])
-def change():
-    # Get the current filename from the request
-    filename = request.form.get('filename')
-
-    # Get the directory of the current file
-    current_directory = os.path.dirname(filename)
-
-    # Get the list of files in the current directory
-    files = [f for f in os.listdir(current_directory) if f.endswith('.json')]  # Only consider JSON files
-
-    # Find the index of the current file
-    current_index = files.index(os.path.basename(filename))
-
-    # Calculate the index of the next file
-    next_index = (current_index + 1) % len(files)
-
-    # Get the path of the next file
-    next_file = os.path.join(current_directory, files[next_index])
-
-    return redirect(url_for('hello_world', filename=next_file))  # Pass the next filename when redirecting
+      #return redirect('/')  
+      return redirect(url_for('index'))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,58 @@
+{
+    "static": [
+        {
+            "id": "001",
+            "image_path": "static/001/image.jpg",
+            "json_path": "static/001/polygons.json",
+            "current_page": 1
+        },
+        {
+            "id": "002",
+            "image_path": "static/002/002.jpg",
+            "json_path": "static/002/polygons.json",
+            "current_page": 2
+        },
+        {
+            "id": "003",
+            "image_path": "static/003/003.jpg",
+            "json_path": "static/003/polygons.json",
+            "current_page": 3
+        },
+        {
+            "id": "004",
+            "image_path": "static/004/004.jpg",
+            "json_path": "static/004/polygons.json",
+            "current_page": 4
+        },
+        {
+            "id": "005",
+            "image_path": "static/005/005.jpg",
+            "json_path": "static/005/polygons.json",
+            "current_page": 5
+        },
+        {
+            "id": "006",
+            "image_path": "static/006/006.jpg",
+            "json_path": "static/006/polygons.json",
+            "current_page": 6
+        },
+        {
+            "id": "007",
+            "image_path": "static/007/007.jpg",
+            "json_path": "static/007/polygons.json",
+            "current_page": 7
+        },
+        {
+            "id": "008",
+            "image_path": "static/008/008.jpg",
+            "json_path": "static/008/polygons.json",
+            "current_page": 8
+        },
+        {
+            "id": "009",
+            "image_path": "static/009/009.jpg",
+            "json_path": "static/009/polygons.json",
+            "current_page": 9
+        }
+    ]
+}

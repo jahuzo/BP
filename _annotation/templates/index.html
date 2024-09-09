@@ -24,8 +24,13 @@
         // Embed Python 'polygons' and 'cur_dir' variable into JavaScript using Jinja2
 
         let polygons = {{ polygons | tojson }};
+        console.log(polygons);  // Debug to check if polygons are loading correctly
         polygons.push({points: [], label: ''}); // Initialize new polygon
+
+        // Set the path for the image (adjust this path as necessary)
+        const imagePath = "{{ url_for('static', filename='001/image.jpg') }}";
     </script>
+    <!--img id="testImage" src="{{ url_for('static', filename='001/image.jpg') }}" alt="Test Image"-->
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
     
