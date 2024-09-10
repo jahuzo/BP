@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const ctx = canvas.getContext('2d');
     const image = new Image();
 
-    image.src = '/static/002/image.jpg'; // Set the image source
+    image.src = '/static/003/image.jpg'; // Set the image source
 
     let scale = 1;
     const scaleMultiplier = 0.1;

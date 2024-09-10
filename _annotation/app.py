@@ -252,16 +252,16 @@ def predict():
     
 
 @app.route('/submit-polygons', methods=['POST'])
-def submit_polygons(dir_path):
+def submit_polygons():
       # Parse the JSON data
       polygons = request.get_json()
       
       # Filter out polygons with fewer than 3 points
       polygons = [polygon for polygon in polygons if len(polygon["points"]) >= 3]
       
-      # Save the data
-      file_path = os.path.join(app.static_folder, dir_path, 'polygons.json')
-      with (file_path, 'polygons.json', 'w') as f:
+      os.chdir(cur_dir)
+      
+      with open('polygons.json', 'w') as f:
           json.dump(polygons, f, indent=4)
   
       #return redirect('/')  
