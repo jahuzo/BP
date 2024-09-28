@@ -7,7 +7,7 @@ from flask import redirect, url_for
 from flask import Flask, render_template
 from flask import request, jsonify
 from flask import Response
-from prettytable import PrettyTable
+#from prettytable import PrettyTable
 import logging
 import json
 import cv2

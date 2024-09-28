@@ -3,7 +3,7 @@ import tensorflow as tf
 from tensorflow.python.keras import layers, models, metrics
 import json
 import numpy as np
-from sklearn.model_selection import train_test_split
+#from sklearn.model_selection import train_test_split
 from PIL import Image
 import cv2
 import matplotlib.pyplot as plt
@@ -16,6 +16,7 @@ sys.path.append(r'C:\Users\jahuz\Links\BP\_annotation')
 from paths import *
 
 tf.debugging.set_log_device_placement(True)
+print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU'))) # 
 
 root_dir = static_path
 
