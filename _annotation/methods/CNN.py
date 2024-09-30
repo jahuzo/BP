@@ -14,8 +14,10 @@ import sys
 
 sys.path.append(r'C:\Users\jahuz\Links\BP\_annotation')
 
-# Module imports
-from paths import *
+# paths
+static_path = '/static'
+dir_path = '001'
+cur_dir = static_path+'/'+dir_path
 
 # Debugging and checks
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
