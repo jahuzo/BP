@@ -1,10 +1,11 @@
-# imports
-import tensorflow as tf
-
-from keras import layers, models, metrics
+# Imports
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import transforms
+from torch.utils.data import Dataset, DataLoader
 import json
 import numpy as np
-#from sklearn.model_selection import train_test_split
 from PIL import Image
 import cv2
 import matplotlib.pyplot as plt
@@ -13,148 +14,209 @@ import sys
 
 sys.path.append(r'C:\Users\jahuz\Links\BP\_annotation')
 
-#module imports
+# Module imports
 from paths import *
 
-# debugging and checks
-tf.debugging.set_log_device_placement(True)
-print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU'))) # 
-tf.test.is_gpu_available()
+# Debugging and checks
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
 
 input("Press Enter to continue...")
 print("OK...moving on")
 
 root_dir = static_path
 
-# Custom FPR metric
-class FalsePositiveRate(tf.keras.metrics.Metric):
-    def __init__(self, name="false_positive_rate", **kwargs):
-        super(FalsePositiveRate, self).__init__(name=name, **kwargs)
-        self.false_positives = self.add_weight(name="fp", initializer="zeros")
-        self.true_negatives = self.add_weight(name="tn", initializer="zeros")
+# Custom Dataset
+class CustomDataset(Dataset):
+    def __init__(self, folders, root_dir, transform=None):
+        self.folders = folders
+        self.root_dir = root_dir
+        self.transform = transform
+        self.images = []
+        self.masks = []
+        self.load_data()
 
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Threshold the predictions to get binary values
-        y_pred = tf.cast(tf.greater_equal(y_pred, 0.5), tf.float32)
-        # Calculate False Positives and True Negatives
-        fp = tf.reduce_sum(tf.cast(tf.logical_and(tf.equal(y_true, 0), tf.equal(y_pred, 1)), tf.float32))
-        tn = tf.reduce_sum(tf.cast(tf.logical_and(tf.equal(y_true, 0), tf.equal(y_pred, 0)), tf.float32))
-        self.false_positives.assign_add(fp)
-        self.true_negatives.assign_add(tn)
+    def load_data(self):
+        for folder in self.folders:
+            image_path = os.path.join(self.root_dir, folder, 'image.jpg')
+            json_path = os.path.join(self.root_dir, folder, 'polygons.json')
 
-    def result(self):
-        return self.false_positives / (self.false_positives + self.true_negatives + tf.keras.backend.epsilon())
+            # Load the image
+            image = Image.open(image_path)
+            image = image.convert("RGB")  # Ensure image is RGB
+            self.images.append(image)
 
-    def reset_states(self):
-        self.false_positives.assign(0.0)
-        self.true_negatives.assign(0.0)
+            # Load the polygons
+            with open(json_path, 'r') as f:
+                polygons = json.load(f)
 
+            # Create a mask for the polygons
+            mask = np.zeros((256, 256), dtype=np.uint8)  # Assuming original size is 256x256
+            for polygon in polygons:
+                if polygon.get('label') == 'a':
+                    points = np.array([[point['x'], point['y']] for point in polygon['points']], dtype=np.int32)
+                    cv2.fillPoly(mask, [points], 1)
 
+            self.masks.append(mask)
 
-# Define training and testing folder names
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        image = self.images[idx]
+        mask = self.masks[idx]
+
+        if self.transform:
+            image = self.transform(image)
+            mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0)  # Add channel dimension
+
+        return image, mask
+
+# Define transforms
+transform = transforms.Compose([
+    transforms.Resize((32, 32)),
+    transforms.ToTensor(),
+])
+
+# Load training and testing data
 train_folders = ['001', '002', '003', '004', '005', '006', '007']
 test_folders = ['008', '009']
 
-# Function to load data from a list of folders
-def load_data(train_folders, root_dir, target_size=(256, 256)):
-    train_images = []
-    train_masks = []
+train_dataset = CustomDataset(train_folders, root_dir, transform=transform)
+test_dataset = CustomDataset(test_folders, root_dir, transform=transform)
 
-    for folder in train_folders:
-        image_path = os.path.join(root_dir, folder, 'image.jpg')
-        json_path = os.path.join(root_dir, folder, 'polygons.json')
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
-        # Load the image
-        image = Image.open(image_path)
-        image = image.resize(target_size)  # Resize image
-        image = np.array(image)
+# Define the model
+class UNet(nn.Module):
+    def __init__(self):
+        super(UNet, self).__init__()
+        self.encoder1 = self.conv_block(3, 32)
+        self.encoder2 = self.conv_block(32, 64)
+        self.encoder3 = self.conv_block(64, 128)
+        self.decoder1 = self.upconv_block(128, 64)
+        self.decoder2 = self.upconv_block(64, 32)
+        self.final_conv = nn.Conv2d(32, 1, kernel_size=1, activation='sigmoid')
 
-        # Load the polygons
-        with open(json_path, 'r') as f:
-            polygons = json.load(f)  # This should return a list
+    def conv_block(self, in_channels, out_channels):
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
 
-        # Create a mask for the polygons
-        mask = np.zeros((target_size[0], target_size[1]), dtype=np.uint8)  # Create mask with target size
-        for polygon in polygons:  # Iterate through the list
-            if polygon.get('label') == 'a':
-                # Extract points
-                points = np.array([[point['x'], point['y']] for point in polygon['points']], dtype=np.int32)
-                cv2.fillPoly(mask, [points], 1)
+    def upconv_block(self, in_channels, out_channels):
+        return nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
 
-        train_images.append(image)
-        train_masks.append(mask)
+    def forward(self, x):
+        enc1 = self.encoder1(x)
+        enc2 = self.encoder2(enc1)
+        enc3 = self.encoder3(enc2)
 
-    return np.array(train_images), np.array(train_masks)
+        dec1 = self.decoder1(enc3)
+        dec1 = torch.cat((dec1, enc2), dim=1)  # Skip connection
+        dec1 = self.decoder1(dec1)
 
-# Load training data
-train_images, train_masks = load_data(train_folders, root_dir)
+        dec2 = self.decoder2(dec1)
+        dec2 = torch.cat((dec2, enc1), dim=1)  # Skip connection
+        output = self.final_conv(dec2)
 
-# Load testing data
-test_images, test_masks = load_data(test_folders, root_dir)
+        return torch.sigmoid(output)
 
-# Normalize the images (values between 0 and 1)
-train_images = train_images / 255.0
-test_images = test_images / 255.0
+# Instantiate the model
+model = UNet().to(device)
 
-# Resize images and masks to (32, 32) for the CNN model
-train_images = tf.image.resize(train_images, (32, 32))
-train_masks = tf.image.resize(train_masks[..., np.newaxis], (32, 32))
-
-test_images = tf.image.resize(test_images, (32, 32))
-test_masks = tf.image.resize(test_masks[..., np.newaxis], (32, 32))
-
-print("Train Images Shape:", train_images.shape)  # Expected: (num_samples, 32, 32, 3)
-print("Train Masks Shape:", train_masks.shape)    # Expected: (num_samples, 32, 32, 1)
-print("Test Images Shape:", test_images.shape)
-print("Test Masks Shape:", test_masks.shape)
-
-# model
-model = models.Sequential([
-    layers.Conv2D(32, (3, 3), activation='relu', input_shape=(32, 32, 3)),
-    layers.MaxPooling2D((2, 2)),  # Downsamples to (16, 16)
-    layers.Conv2D(64, (3, 3), activation='relu'),
-    layers.MaxPooling2D((2, 2)),  # Downsamples to (8, 8)
-    layers.Conv2D(128, (3, 3), activation='relu'),
-    layers.MaxPooling2D((2, 2)),  # Downsamples to (4, 4)
-
-    # Upsampling back to (32, 32)
-    layers.Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same', activation='relu'),  # Upsamples to (8, 8)
-    layers.Conv2DTranspose(64, (3, 3), strides=(2, 2), padding='same', activation='relu'),   # Upsamples to (16, 16)
-    layers.Conv2DTranspose(32, (3, 3), strides=(2, 2), padding='same', activation='relu'),   # Upsamples to (32, 32)
-
-    layers.Conv2D(1, (1, 1), activation='sigmoid')  # Final output: (32, 32, 1)
-])
-
-# Compile the model
-model.compile(optimizer='sgd',
-              loss='binary_crossentropy',
-              metrics=[
-                  metrics.MeanIoU(num_classes=2),  # IoU
-                  metrics.Accuracy(),  # Accuracy
-                  metrics.Precision(),  # Precision
-                  metrics.Recall(),  # Recall (TPR)
-              ])
+# Define loss and optimizer
+criterion = nn.BCELoss()
+optimizer = optim.SGD(model.parameters(), lr=0.01)
 
 # Train the model
-history = model.fit(train_images, train_masks, epochs=10)
+num_epochs = 10
+for epoch in range(num_epochs):
+    model.train()
+    for images, masks in train_loader:
+        images, masks = images.to(device), masks.to(device)
+        
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, masks)
+        loss.backward()
+        optimizer.step()
 
+    print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}")
 
-# Train the model
-history = model.fit(train_images, train_masks, epochs=10)
+def calculate_metrics(outputs, masks):
+    # Binarize outputs
+    predicted = (outputs > 0.5).float()
+    
+    # Flatten the predicted and true masks for metric calculation
+    predicted_flat = predicted.view(-1).cpu()
+    masks_flat = masks.view(-1).cpu()
 
+    # Calculate True Positives, False Positives, True Negatives, False Negatives
+    TP = ((predicted_flat == 1) & (masks_flat == 1)).sum().item()
+    TN = ((predicted_flat == 0) & (masks_flat == 0)).sum().item()
+    FP = ((predicted_flat == 1) & (masks_flat == 0)).sum().item()
+    FN = ((predicted_flat == 0) & (masks_flat == 1)).sum().item()
 
+    # Calculate metrics
+    IoU = TP / (TP + FP + FN) if (TP + FP + FN) > 0 else 0
+    FPR = FP / (FP + TN) if (FP + TN) > 0 else 0
+    TPR = TP / (TP + FN) if (TP + FN) > 0 else 0
+    Accuracy = (TP + TN) / (TP + TN + FP + FN) if (TP + TN + FP + FN) > 0 else 0
+    Precision = TP / (TP + FP) if (TP + FP) > 0 else 0
 
-test_loss, test_iou, test_accuracy, test_precision, test_tpr, test_fpr = model.evaluate(test_images, test_masks)
+    return IoU, FPR, TPR, Accuracy, Precision
 
-print(f"Test IoU: {test_iou}")
-print(f"Test Accuracy: {test_accuracy}")
-print(f"Test Precision: {test_precision}")
-print(f"Test TPR (Recall): {test_tpr}")
-print(f"Test FPR: {test_fpr}")
+# Evaluate the model
+model.eval()
+with torch.no_grad():
+    total_loss = 0
+    all_IoU = []
+    all_FPR = []
+    all_TPR = []
+    all_Accuracy = []
+    all_Precision = []
+
+    for images, masks in test_loader:
+        images, masks = images.to(device), masks.to(device)
+        outputs = model(images)
+        loss = criterion(outputs, masks)
+        total_loss += loss.item()
+
+        # Calculate metrics for this batch
+        IoU, FPR, TPR, Accuracy, Precision = calculate_metrics(outputs, masks)
+        all_IoU.append(IoU)
+        all_FPR.append(FPR)
+        all_TPR.append(TPR)
+        all_Accuracy.append(Accuracy)
+        all_Precision.append(Precision)
+
+average_loss = total_loss / len(test_loader)
+average_IoU = sum(all_IoU) / len(all_IoU)
+average_FPR = sum(all_FPR) / len(all_FPR)
+average_TPR = sum(all_TPR) / len(all_TPR)
+average_Accuracy = sum(all_Accuracy) / len(all_Accuracy)
+average_Precision = sum(all_Precision) / len(all_Precision)
+
+print(f"Average Test Loss: {average_loss:.4f}")
+print(f"Average IoU: {average_IoU:.4f}")
+print(f"Average FPR: {average_FPR:.4f}")
+print(f"Average TPR (Recall): {average_TPR:.4f}")
+print(f"Average Accuracy: {average_Accuracy:.4f}")
+print(f"Average Precision: {average_Precision:.4f}")
 
 # Save the model
-model_dir = os.path.join(static_path, 'model_CNN.h5')
+model_dir = os.path.join(static_path, 'model_UNet.pth')
 os.makedirs(os.path.dirname(model_dir), exist_ok=True)
-model.save(model_dir)
+torch.save(model.state_dict(), model_dir)
+
 
 
