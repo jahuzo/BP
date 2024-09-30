@@ -1,6 +1,7 @@
 # imports
 import tensorflow as tf
-from tensorflow.python.keras import layers, models, metrics
+
+from keras import layers, models, metrics
 import json
 import numpy as np
 #from sklearn.model_selection import train_test_split
@@ -15,8 +16,13 @@ sys.path.append(r'C:\Users\jahuz\Links\BP\_annotation')
 #module imports
 from paths import *
 
+# debugging and checks
 tf.debugging.set_log_device_placement(True)
-print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU'))) # 
+print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU'))) # 
+tf.test.is_gpu_available()
+
+input("Press Enter to continue...")
+print("OK...moving on")
 
 root_dir = static_path
 
@@ -105,12 +111,18 @@ print("Test Masks Shape:", test_masks.shape)
 # model
 model = models.Sequential([
     layers.Conv2D(32, (3, 3), activation='relu', input_shape=(32, 32, 3)),
-    layers.MaxPooling2D((2, 2)),
+    layers.MaxPooling2D((2, 2)),  # Downsamples to (16, 16)
     layers.Conv2D(64, (3, 3), activation='relu'),
-    layers.MaxPooling2D((2, 2)),
-    layers.Flatten(),
-    layers.Dense(128, activation='relu'),
-    layers.Dense(1, activation='sigmoid')  # Single output for binary segmentation (1 class = 'a')
+    layers.MaxPooling2D((2, 2)),  # Downsamples to (8, 8)
+    layers.Conv2D(128, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),  # Downsamples to (4, 4)
+
+    # Upsampling back to (32, 32)
+    layers.Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same', activation='relu'),  # Upsamples to (8, 8)
+    layers.Conv2DTranspose(64, (3, 3), strides=(2, 2), padding='same', activation='relu'),   # Upsamples to (16, 16)
+    layers.Conv2DTranspose(32, (3, 3), strides=(2, 2), padding='same', activation='relu'),   # Upsamples to (32, 32)
+
+    layers.Conv2D(1, (1, 1), activation='sigmoid')  # Final output: (32, 32, 1)
 ])
 
 # Compile the model
@@ -120,9 +132,12 @@ model.compile(optimizer='sgd',
                   metrics.MeanIoU(num_classes=2),  # IoU
                   metrics.Accuracy(),  # Accuracy
                   metrics.Precision(),  # Precision
-                  metrics.Recall(),  # TPR (Recall)
-                 # FalsePositiveRate()  # Custom FPR metric
+                  metrics.Recall(),  # Recall (TPR)
               ])
+
+# Train the model
+history = model.fit(train_images, train_masks, epochs=10)
+
 
 # Train the model
 history = model.fit(train_images, train_masks, epochs=10)
