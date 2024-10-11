@@ -1,10 +1,19 @@
-# modify for your own path
 
-#static_path = 'C:/Users/jahuz/Links/BP/_annotation/static'
-#dir_path = '001'
-#cur_dir = static_path+'/'+dir_path
+## UNIVERSAL IMPORTS
 
+# Imports
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import transforms, models
+from torch.utils.data import Dataset, DataLoader
+import json
+import numpy as np
+from PIL import Image
+import cv2
+import matplotlib.pyplot as plt
 import os
+
 
 def find_directory(target_static):
     """

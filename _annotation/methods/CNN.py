@@ -1,22 +1,9 @@
-# Imports
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torchvision import transforms
-from torch.utils.data import Dataset, DataLoader
-import json
-import numpy as np
-from PIL import Image
-import cv2
-import matplotlib.pyplot as plt
-import os
+# mandatory for paths import
 import sys
-
 sys.path.append(r'/mnt/c/Users/jahuz/Links/BP/_annotation')
 
-# paths
+# header file basically
 from paths import *
-
 
 # Debugging and checks
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
