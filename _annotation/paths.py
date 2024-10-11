@@ -42,7 +42,7 @@ def find_directory(target_static):
 
 # Specify the target directory name
 target_static = "static"
-target_00x = "001"
+target_00x = "001" #deprecated
 
 # Search for the directory
 result_dir = find_directory(target_static)
