@@ -12,12 +12,11 @@ import matplotlib.pyplot as plt
 import os
 import sys
 
-sys.path.append(r'C:\Users\jahuz\Links\BP\_annotation')
+sys.path.append(r'/mnt/c/Users/jahuz/Links/BP/_annotation')
 
 # paths
-static_path = '/static'
-dir_path = '001'
-cur_dir = static_path+'/'+dir_path
+from paths import *
+
 
 # Debugging and checks
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,7 +25,7 @@ print("Using device:", device)
 input("Press Enter to continue...")
 print("OK...moving on")
 
-root_dir = static_path
+root_dir = result_dir
 
 # Custom Dataset
 class CustomDataset(Dataset):
@@ -99,7 +98,7 @@ class UNet(nn.Module):
         self.encoder3 = self.conv_block(64, 128)
         self.decoder1 = self.upconv_block(128, 64)
         self.decoder2 = self.upconv_block(64, 32)
-        self.final_conv = nn.Conv2d(32, 1, kernel_size=1, activation='sigmoid')
+        self.final_conv = nn.Conv2d(32, 1, kernel_size=1) # removed  activation='sigmoid'
 
     def conv_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -216,7 +215,7 @@ print(f"Average Accuracy: {average_Accuracy:.4f}")
 print(f"Average Precision: {average_Precision:.4f}")
 
 # Save the model
-model_dir = os.path.join(static_path, 'model_UNet.pth')
+model_dir = os.path.join(result_dir, 'model_UNet.pth')
 os.makedirs(os.path.dirname(model_dir), exist_ok=True)
 torch.save(model.state_dict(), model_dir)
 
