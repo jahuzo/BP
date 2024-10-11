@@ -50,17 +50,14 @@ def load_data(data_dir):
     for folder in os.listdir(data_dir):
         folder_path = os.path.join(data_dir, folder)
 
-        # Check if the path is a directory
         if os.path.isdir(folder_path):
-            image_path = os.path.join(folder_path, 'image.jpg')  # Path to the image
-            json_path = os.path.join(folder_path, 'polygons.json')  # Path to polygons.json
+            image_path = os.path.join(folder_path, 'image.jpg')
+            json_path = os.path.join(folder_path, 'polygons.json')
             
             # Check if the image file exists
             if os.path.isfile(image_path):
                 input_image = Image.open(image_path)
-                
-                # Apply transformations directly here
-                input_image = transform(input_image)
+                input_image = transform(input_image)  # Apply transformation here
                 train_images.append(input_image)
 
                 # Load existing polygons from JSON file
@@ -68,7 +65,6 @@ def load_data(data_dir):
                     with open(json_path, 'r') as f:
                         existing_data = json.load(f)
 
-                    # Filter for polygons labeled "a"
                     filtered_polygons = [
                         item for item in existing_data if item.get('label') == 'a'
                     ]
@@ -91,11 +87,12 @@ class LetterDataset(Dataset):
         return len(self.images)
 
     def __getitem__(self, idx):
-        image = self.images[idx]
+        image = self.images[idx]  # This will be a tensor already transformed
         label = self.labels[idx]
 
+        # Apply any additional transformations if needed
         if self.transform:
-            image = self.transform(image)
+            image = self.transform(image)  # This line can be omitted if images are already tensors
 
         return image, label
 
@@ -123,12 +120,23 @@ model = ResNetModel().to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
+
+batch_size = 16
+num_samples = train_images.size(0)
+num_batches = (num_samples + batch_size - 1) // batch_size
 # Training loop
-num_epochs = 5  # Adjust number of epochs as needed
+num_epochs = 5
 for epoch in range(num_epochs):
     model.train()
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min(start_idx + batch_size, num_samples)
+
+        # Get a batch of images
+        images = train_images[start_idx:end_idx].to(device)
+
+        # Assuming you have labels prepared similarly
+        labels = ...  # Your labels logic should be here
 
         optimizer.zero_grad()
         outputs = model(images)
