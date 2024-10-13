@@ -24,17 +24,11 @@ class ResNetModel(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-# Data loading function
-import os
-import json
-from PIL import Image
-
 transform = transforms.Compose([
     transforms.Resize((224, 224)),  # Resize all images to 224x224 as defined by torch resnet docs
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
-
 
 label_to_index = {'a': 0}  # Only mapping for 'a'
 
@@ -131,7 +125,7 @@ for epoch in range(num_epochs):
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-
+    
     print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
 
 def infer_and_update_polygons(model, data_dir):
@@ -200,7 +194,3 @@ def infer_and_update_polygons(model, data_dir):
 # Example usage
 infer_and_update_polygons(model, result_dir)
 
-# Optional: Show a sample image
-plt.imshow(train_images[0])
-plt.title(train_labels[0])
-plt.show()
