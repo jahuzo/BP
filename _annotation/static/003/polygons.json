@@ -536,5 +536,50 @@
             150,
             250
         ]
+    },
+    {
+        "label": "detected",
+        "polygon": [
+            100,
+            200,
+            150,
+            250
+        ]
+    },
+    {
+        "label": "detected",
+        "polygon": [
+            100,
+            200,
+            150,
+            250
+        ]
+    },
+    {
+        "label": "detected",
+        "polygon": [
+            100,
+            200,
+            150,
+            250
+        ]
+    },
+    {
+        "label": "detected",
+        "polygon": [
+            100,
+            200,
+            150,
+            250
+        ]
+    },
+    {
+        "label": "detected",
+        "polygon": [
+            100,
+            200,
+            150,
+            250
+        ]
     }
 ]

@@ -68,34 +68,38 @@ class BackboneCNN(nn.Module):
         self.pool = nn.MaxPool2d(2, 2)
     
     def forward(self, x):
-        # Extract feature maps at each layer
-        c1 = F.relu(self.conv1(x))  # 32 channels
-        p1 = self.pool(c1)          # Downsample
-        c2 = F.relu(self.conv2(p1)) # 64 channels
-        p2 = self.pool(c2)          # Downsample
-        c3 = F.relu(self.conv3(p2)) # 128 channels
-        p3 = self.pool(c3)          # Downsample
-        c4 = F.relu(self.conv4(p3)) # 256 channels
-        p4 = self.pool(c4)          # Downsample
-        return [p1, p2, p3, p4]     # Return feature maps from multiple layers
+        c1 = F.relu(self.conv1(x))
+        p1 = self.pool(c1)
+        c2 = F.relu(self.conv2(p1))
+        p2 = self.pool(c2)
+        c3 = F.relu(self.conv3(p2))
+        p3 = self.pool(c3)
+        c4 = F.relu(self.conv4(p3))
+        p4 = self.pool(c4)
+        return [p1, p2, p3, p4]
+
 
 # Define FPN
 class FPN(nn.Module):
     def __init__(self):
         super(FPN, self).__init__()
         
+        # Projecting the feature maps to have the same number of channels
+        self.lateral_p4 = nn.Conv2d(256, 128, kernel_size=1)  # Match channels of p4 to 128
         self.lateral_p3 = nn.Conv2d(128, 128, kernel_size=1)
-        self.lateral_p2 = nn.Conv2d(64, 64, kernel_size=1)
-        self.lateral_p1 = nn.Conv2d(32, 32, kernel_size=1)
+        self.lateral_p2 = nn.Conv2d(64, 128, kernel_size=1)
+        self.lateral_p1 = nn.Conv2d(32, 128, kernel_size=1)
         
         self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
-        self.final_conv = nn.Conv2d(32, 128, kernel_size=3, padding=1)
+        self.final_conv = nn.Conv2d(128, 128, kernel_size=3, padding=1)
 
     def forward(self, p1, p2, p3, p4):
-        p3_fused = F.relu(self.lateral_p3(p3) + self.upsample(p4))
-        p2_fused = F.relu(self.lateral_p2(p2) + self.upsample(p3_fused))
-        p1_fused = F.relu(self.lateral_p1(p1) + self.upsample(p2_fused))
-        final_feature = self.final_conv(p1_fused)
+        # Ensure all lateral connections have the same number of channels
+        p4_ = self.lateral_p4(p4)  # Reduce p4 to 128 channels
+        p3_fused = F.relu(self.lateral_p3(p3) + self.upsample(p4_))  # Adding with upsampled p4_
+        p2_fused = F.relu(self.lateral_p2(p2) + self.upsample(p3_fused))  # Adding with upsampled p3_fused
+        p1_fused = F.relu(self.lateral_p1(p1) + self.upsample(p2_fused))  # Adding with upsampled p2_fused
+        final_feature = self.final_conv(p1_fused)  # Final feature map
         return final_feature
 
 
@@ -121,7 +125,6 @@ class FPNModel(nn.Module):
 
 
 def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
-
     model.to(device)
 
     criterion = nn.CrossEntropyLoss()
@@ -132,6 +135,8 @@ def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
 
     for epoch in range(epochs):
         running_loss = 0.0
+        model.train()  # Set the model to training mode
+        
         for i, (images, labels) in enumerate(train_loader):
             images, labels = images.to(device), labels.to(device)
 
@@ -151,3 +156,77 @@ def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
         print(f"Epoch {epoch+1}, Loss: {running_loss/len(train_loader)}")
 
     print("Training complete!")
+
+def infer_and_update_polygons(model, data_dir):
+    """
+    Run inference on each image in the directory, and update the polygons.json with detected polygons.
+    
+    :param model: Trained model to run inference.
+    :param data_dir: Directory where images and polygons.json are stored.
+    """
+    # Iterate through each folder in the directory
+    for folder in os.listdir(data_dir):
+        folder_path = os.path.join(data_dir, folder)
+        
+        if os.path.isdir(folder_path):
+            image_path = os.path.join(folder_path, 'image.jpg')
+            json_path = os.path.join(folder_path, 'polygons.json')
+            
+            # Load image
+            input_image = Image.open(image_path)
+
+            # Load polygons.json data
+            if os.path.exists(json_path):
+                with open(json_path, 'r') as f:
+                    existing_data = json.load(f)
+            else:
+                print(f"No polygons.json found in {folder}")
+                continue
+            
+            # Preprocess the image for the model
+            preprocess = transforms.Compose([
+                transforms.Resize((256, 256)),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+            input_tensor = preprocess(input_image).unsqueeze(0)  # Add batch dimension
+
+            # Move to device (GPU or CPU)
+            input_tensor = input_tensor.to(device)
+            model.to(device)
+
+            # Run inference to get predictions
+            model.eval()
+            with torch.no_grad():
+                output = model(input_tensor)
+                # You will need to add actual logic here for processing the output to get "detected" polygons.
+                # Placeholder: Let's assume `detected_polygons` is obtained from your model's output
+                detected_polygons = [
+                    {
+                        "label": "detected",
+                        "polygon": [100, 200, 150, 250]  # Placeholder polygon coordinates
+                    }
+                ]
+
+            # Update polygons.json by adding the new "detected" polygons
+            for polygon in detected_polygons:
+                existing_data.append(polygon)
+
+            # Write updated data back to polygons.json
+            with open(json_path, 'w') as f:
+                json.dump(existing_data, f, indent=4)
+
+            print(f"Updated polygons saved in {json_path}")
+            
+train_images, train_labels, train_polygons = load_data(result_dir)
+
+# Initialize and train model
+model = FPNModel()
+train_model(model, train_images, train_labels, epochs=10)
+infer_and_update_polygons(model, result_dir)
+
+# eval
+
+result = universal_accuracy_function(model, result_dir)
+print(result)
