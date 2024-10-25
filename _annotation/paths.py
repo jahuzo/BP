@@ -65,6 +65,39 @@ def load_polygons(json_path):
         data = json.load(f)
     return data
 
+import os
+import json
+
+def delete_detected_labels(base_path):
+    # Loop through folder names from 001 to 009
+    for folder_num in range(1, 10):
+        folder_name = f"{folder_num:03d}"  # Format as 001, 002, ..., 009
+        folder_path = os.path.join(base_path, folder_name)
+        json_path = os.path.join(folder_path, 'polygons.json')
+
+        # Check if the polygons.json file exists
+        if os.path.exists(json_path):
+            # Load the JSON data
+            with open(json_path, 'r') as f:
+                polygons = json.load(f)
+            
+            # Remove items with the label "detected"
+            filtered_polygons = [polygon for polygon in polygons if polygon.get('label') != 'detected']
+
+            # Write the modified data back to polygons.json
+            with open(json_path, 'w') as f:
+                json.dump(filtered_polygons, f, indent=4)
+
+            print(f"Processed: {json_path}")
+        else:
+            print(f"File not found: {json_path}")
+
+# example
+
+#delete_detected_labels(result_dir)
+
+
+
 def calculate_accuracy(detected_polygons, ground_truth_polygons):
     """Calculate accuracy by comparing detected polygons to ground truth."""
     true_positives = 0
