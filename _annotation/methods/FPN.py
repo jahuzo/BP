@@ -104,6 +104,7 @@ class FPN(nn.Module):
 
 
 # Combine the 2 models + classifier
+# Modify the classifier to predict bounding box coordinates (4 values instead of class labels)
 class FPNModel(nn.Module):
     def __init__(self):
         super(FPNModel, self).__init__()
@@ -114,14 +115,15 @@ class FPNModel(nn.Module):
             nn.ReLU(),
             nn.AdaptiveAvgPool2d(1),  # Global average pooling
             nn.Flatten(),
-            nn.Linear(64, 2)  # Two classes: "a" (0) and "background" (1)
+            nn.Linear(64, 4)  # Output 4 values: xmin, ymin, xmax, ymax
         )
     
     def forward(self, x):
         p1, p2, p3, p4 = self.backbone(x)
         fpn_features = self.fpn(p1, p2, p3, p4)
         output = self.classifier(fpn_features)
-        return output
+        return output  # Return 4 values for bounding box
+
 
 
 def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
@@ -159,11 +161,14 @@ def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
 
 def infer_and_update_polygons(model, data_dir):
     """
-    Run inference on each image in the directory, and update the polygons.json with detected polygons.
+    Run inference on each image in the directory, and update the polygons.json with detected bounding boxes.
     
     :param model: Trained model to run inference.
     :param data_dir: Directory where images and polygons.json are stored.
     """
+    model.eval()  # Set model to evaluation mode
+    model.to(device)  # Move model to the appropriate device (GPU/CPU)
+
     # Iterate through each folder in the directory
     for folder in os.listdir(data_dir):
         folder_path = os.path.join(data_dir, folder)
@@ -172,52 +177,56 @@ def infer_and_update_polygons(model, data_dir):
             image_path = os.path.join(folder_path, 'image.jpg')
             json_path = os.path.join(folder_path, 'polygons.json')
             
+            if not os.path.isfile(image_path):
+                print(f"Image not found: {image_path}")
+                continue
+
             # Load image
             input_image = Image.open(image_path)
 
-            # Load polygons.json data
+            # Load polygons.json data (if it exists)
             if os.path.exists(json_path):
                 with open(json_path, 'r') as f:
                     existing_data = json.load(f)
             else:
-                print(f"No polygons.json found in {folder}")
-                continue
+                existing_data = []  # If no polygons.json, start fresh
             
             # Preprocess the image for the model
             preprocess = transforms.Compose([
                 transforms.Resize((256, 256)),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # Normalize for pre-trained models
             ])
             input_tensor = preprocess(input_image).unsqueeze(0)  # Add batch dimension
 
             # Move to device (GPU or CPU)
             input_tensor = input_tensor.to(device)
-            model.to(device)
 
-            # Run inference to get predictions
-            model.eval()
+            # Run inference to get predicted bounding box
             with torch.no_grad():
                 output = model(input_tensor)
-                # You will need to add actual logic here for processing the output to get "detected" polygons.
-                # Placeholder: Let's assume `detected_polygons` is obtained from your model's output
-                detected_polygons = [
-                    {
-                        "label": "detected",
-                        "polygon": [100, 200, 150, 250]  # Placeholder polygon coordinates
-                    }
-                ]
+                # Assuming the model outputs [xmin, ymin, xmax, ymax] for the bounding box
+                xmin, ymin, xmax, ymax = output[0].cpu().numpy()  # Convert to numpy and move back to CPU
 
-            # Update polygons.json by adding the new "detected" polygons
-            for polygon in detected_polygons:
-                existing_data.append(polygon)
+                # Prepare detected bounding box format for polygons.json
+                detected_box = {
+                    "label": "detected",
+                    "polygon": [
+                        {"x": int(xmin), "y": int(ymin)},  # Top-left corner
+                        {"x": int(xmax), "y": int(ymax)}   # Bottom-right corner
+                    ]
+                }
+
+            # Append the detected box to the existing polygons data
+            existing_data.append(detected_box)
 
             # Write updated data back to polygons.json
             with open(json_path, 'w') as f:
                 json.dump(existing_data, f, indent=4)
 
             print(f"Updated polygons saved in {json_path}")
+
             
 train_images, train_labels, train_polygons = load_data(result_dir)
 
@@ -228,5 +237,3 @@ infer_and_update_polygons(model, result_dir)
 
 # eval
 
-result = universal_accuracy_function(model, result_dir)
-print(result)
