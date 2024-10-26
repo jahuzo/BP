@@ -92,7 +92,7 @@ def delete_detected_labels(base_path):
         else:
             print(f"File not found: {json_path}")
 
-# example
+# deletes "detected" labels
 
 #delete_detected_labels(result_dir)
 

@@ -55,6 +55,7 @@ def plot_image_with_polygons(image_file, polygons):
         plt.fill(x, y, alpha=0.5, color=color)  # Fill the polygon with specified color
         plt.text(x[0], y[0], label, fontsize=10, color='black')  # Label at the first point
 
+    plt.get_current_fig_manager().window.state('normal')  # For Windows
     plt.axis('off')  # Turn off axis numbers and ticks
     plt.show()
 
@@ -67,5 +68,5 @@ def main(directory):
 
 if __name__ == "__main__":
     # Change the directory here (e.g., '001', '002', ... '007')
-    directory = os.path.join(result_dir, '002') # Change the directory here
+    directory = os.path.join(result_dir, '005') # Change the directory here
     main(directory)
