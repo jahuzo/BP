@@ -94,7 +94,7 @@ def delete_detected_labels(base_path):
 
 # deletes "detected" labels
 
-#delete_detected_labels(result_dir)
+delete_detected_labels(result_dir)
 
 
 

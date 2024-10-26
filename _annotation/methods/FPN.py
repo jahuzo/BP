@@ -19,9 +19,13 @@ label_to_index = {"a": 0}  # You can expand this as needed
 
 # Transform for input images
 transform = transforms.Compose([
-    transforms.Resize((128, 128)),  # Resize images to 128x128 (adjust as needed)
+    transforms.Resize((128, 128)),
+    transforms.RandomHorizontalFlip(),  # Flip images
+    transforms.RandomRotation(15),      # Rotate images
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),  # Adjust brightness and contrast
     transforms.ToTensor()
 ])
+
 
 # Function to load training data
 def load_data(data_dir):
@@ -56,17 +60,16 @@ def load_data(data_dir):
 
     return torch.stack(train_images), torch.tensor(train_labels), train_polygons
 
-
 # Define the Backbone (Simple CNN)
 class BackboneCNN(nn.Module):
     def __init__(self):
         super(BackboneCNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)  # First layer output 32 channels
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)  # Second layer output 64 channels
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)  # Third layer output 128 channels
+        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)  # Fourth layer output 256 channels
         self.pool = nn.MaxPool2d(2, 2)
-    
+
     def forward(self, x):
         c1 = F.relu(self.conv1(x))
         p1 = self.pool(c1)
@@ -75,8 +78,8 @@ class BackboneCNN(nn.Module):
         c3 = F.relu(self.conv3(p2))
         p3 = self.pool(c3)
         c4 = F.relu(self.conv4(p3))
-        p4 = self.pool(c4)
-        return [p1, p2, p3, p4]
+        p4 = self.pool(c4)  # p4 will now have 256 channels
+        return p1, p2, p3, p4  # Return all four values
 
 
 # Define FPN
@@ -129,7 +132,7 @@ class FPNModel(nn.Module):
 def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
     model.to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     train_dataset = torch.utils.data.TensorDataset(train_images, train_labels)
@@ -160,16 +163,9 @@ def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
     print("Training complete!")
 
 def infer_and_update_polygons(model, data_dir):
-    """
-    Run inference on each image in the directory, and update the polygons.json with detected bounding boxes.
-    
-    :param model: Trained model to run inference.
-    :param data_dir: Directory where images and polygons.json are stored.
-    """
     model.eval()  # Set model to evaluation mode
     model.to(device)  # Move model to the appropriate device (GPU/CPU)
 
-    # Iterate through each folder in the directory
     for folder in os.listdir(data_dir):
         folder_path = os.path.join(data_dir, folder)
         
@@ -191,12 +187,11 @@ def infer_and_update_polygons(model, data_dir):
             else:
                 existing_data = []  # If no polygons.json, start fresh
             
-            # Preprocess the image for the model
+            # Preprocess the image for the model (match training input size)
             preprocess = transforms.Compose([
-                transforms.Resize((256, 256)),
-                transforms.CenterCrop(224),
+                transforms.Resize((128, 128)),  # Match training size
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # Normalize for pre-trained models
+                # Optionally add normalization
             ])
             input_tensor = preprocess(input_image).unsqueeze(0)  # Add batch dimension
 
@@ -207,25 +202,29 @@ def infer_and_update_polygons(model, data_dir):
             with torch.no_grad():
                 output = model(input_tensor)
                 # Assuming the model outputs [xmin, ymin, xmax, ymax] for the bounding box
-                xmin, ymin, xmax, ymax = output[0].cpu().numpy()  # Convert to numpy and move back to CPU
+                bounding_box = output[0].cpu().numpy()  # Convert to numpy and move back to CPU
+                xmin, ymin, xmax, ymax = bounding_box
 
                 # Prepare detected bounding box format for polygons.json
                 detected_box = {
                     "label": "detected",
                     "polygon": [
                         {"x": int(xmin), "y": int(ymin)},  # Top-left corner
-                        {"x": int(xmax), "y": int(ymax)}   # Bottom-right corner
+                        {"x": int(xmax), "y": int(ymin)},  # Top-right corner
+                        {"x": int(xmax), "y": int(ymax)},  # Bottom-right corner
+                        {"x": int(xmin), "y": int(ymax)}   # Bottom-left corner
                     ]
                 }
 
-            # Append the detected box to the existing polygons data
-            existing_data.append(detected_box)
+                # Check if detected_box is unique (or based on a threshold)
+                if detected_box not in existing_data:
+                    existing_data.append(detected_box)
+                    with open(json_path, 'w') as f:
+                        json.dump(existing_data, f, indent=4)
+                    print(f"Updated polygons saved in {json_path}")
+                else:
+                    print(f"No new detected polygons in {json_path}")
 
-            # Write updated data back to polygons.json
-            with open(json_path, 'w') as f:
-                json.dump(existing_data, f, indent=4)
-
-            print(f"Updated polygons saved in {json_path}")
 
             
 train_images, train_labels, train_polygons = load_data(result_dir)

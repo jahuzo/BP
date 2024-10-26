@@ -20,26 +20,30 @@ def plot_image_with_polygons(image_file, polygons):
     
     # Plot each polygon
     for polygon in polygons:
-        # Handle the first type of polygon with 'points'
+        label = polygon.get('label', None)
+
+        # Handle 'points' structure
         if 'points' in polygon:
             points = polygon['points']
-            label = polygon['label']
             x = [point['x'] for point in points]
             y = [point['y'] for point in points]
         
-        # Handle the second type of polygon with 'polygon'
+        # Handle 'polygon' structure (can be either 4 values or a list of points)
         elif 'polygon' in polygon:
-            label = polygon['label']
-            bbox = polygon['polygon']  # This should be a list of four values
-            
-            # Check if the bbox has the correct number of points
-            if len(bbox) != 4:
-                print(f"Warning: Expected 4 values in 'polygon' for label '{label}', but got {bbox}")
-                continue
-            
-            # Extract x and y coordinates from the bounding box
-            x = [bbox[0], bbox[2], bbox[2], bbox[0]]  # x-coordinates of the bounding box
-            y = [bbox[1], bbox[1], bbox[3], bbox[3]]  # y-coordinates of the bounding box
+            bbox = polygon['polygon']
+
+            # Check if the polygon is a list of points
+            if isinstance(bbox, list) and all(isinstance(p, dict) and 'x' in p and 'y' in p for p in bbox):
+                x = [point['x'] for point in bbox]
+                y = [point['y'] for point in bbox]
+            else:
+                # Treat as a bounding box and expect 4 values
+                if len(bbox) == 4:
+                    x = [bbox[0], bbox[2], bbox[2], bbox[0]]  # x-coordinates of the bounding box
+                    y = [bbox[1], bbox[1], bbox[3], bbox[3]]  # y-coordinates of the bounding box
+                else:
+                    print(f"Warning: Expected 4 values or list of points in 'polygon' for label '{label}', but got {bbox}")
+                    continue
         else:
             continue  # Skip if neither structure is found
 
@@ -68,5 +72,5 @@ def main(directory):
 
 if __name__ == "__main__":
     # Change the directory here (e.g., '001', '002', ... '007')
-    directory = os.path.join(result_dir, '005') # Change the directory here
+    directory = os.path.join(result_dir, '001') # Change the directory here
     main(directory)
