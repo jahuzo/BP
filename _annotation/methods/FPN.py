@@ -29,6 +29,29 @@ transform = transforms.Compose([
 ])
 
 
+def iou_loss(pred_boxes, target_boxes):
+    # Compute IoU loss between predicted and target boxes
+    pred_xmin, pred_ymin, pred_xmax, pred_ymax = pred_boxes.T
+    target_xmin, target_ymin, target_xmax, target_ymax = target_boxes.T
+
+    # Compute intersection
+    inter_xmin = torch.max(pred_xmin, target_xmin)
+    inter_ymin = torch.max(pred_ymin, target_ymin)
+    inter_xmax = torch.min(pred_xmax, target_xmax)
+    inter_ymax = torch.min(pred_ymax, target_ymax)
+    inter_area = torch.clamp(inter_xmax - inter_xmin, min=0) * torch.clamp(inter_ymax - inter_ymin, min=0)
+
+    # Compute areas
+    pred_area = (pred_xmax - pred_xmin) * (pred_ymax - pred_ymin)
+    target_area = (target_xmax - target_xmin) * (target_ymax - target_ymin)
+    union_area = pred_area + target_area - inter_area
+
+    # IoU
+    iou = inter_area / union_area
+    
+    # Return a scalar loss by averaging the IoU
+    return 1 - iou.mean()  # Loss is 1 - IoU (so higher IoU leads to lower loss)
+
 def calculate_bounding_box(polygon):
     points = polygon['points']
     if len(points) < 3:
@@ -145,7 +168,8 @@ class FPNModel(nn.Module):
             nn.ReLU(),
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(64, 4)  # Output 4 values: xmin, ymin, xmax, ymax
+            nn.Linear(64, 4),
+            nn.Sigmoid()  # Constrain output to [0, 1]
         )
     
     def forward(self, x):
@@ -154,11 +178,15 @@ class FPNModel(nn.Module):
         output = self.classifier(fpn_features)
         return output
 
+
 def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
     model.to(device)
 
-    criterion = nn.SmoothL1Loss()  # Use Smooth L1 loss for bounding box regression
+    criterion = nn.SmoothL1Loss()  # Still using Smooth L1 Loss for bounding box regression
     optimizer = optim.Adam(model.parameters(), lr=0.001)
+    
+    # Optional learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
 
     train_dataset = torch.utils.data.TensorDataset(train_images, train_labels)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -172,16 +200,29 @@ def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
 
             optimizer.zero_grad()
             outputs = model(images)
-            loss = criterion(outputs, labels.float())  # Ensure labels are float for bounding box regression
+            
+            # Scale outputs to image dimensions
+            outputs_scaled = outputs * torch.tensor([128, 128, 128, 128]).to(device)
+            
+            # Compute loss
+            loss = criterion(outputs_scaled, labels.float())
+            loss = loss.mean()  # Ensure it's a scalar
 
             loss.backward()
             optimizer.step()
 
             running_loss += loss.item()
 
+        # Learning rate adjustment
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
+        for epoch in range(epochs):
+            # Training code
+            scheduler.step(running_loss)
+
         print(f"Epoch {epoch+1}, Loss: {running_loss/len(train_loader)}")
 
     print("Training complete!")
+
 
 def infer_and_update_polygons(model, data_dir):
     model.eval()
