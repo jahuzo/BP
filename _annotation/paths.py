@@ -6,8 +6,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import torchvision
 from torchvision import transforms, models
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, TensorDataset
+from torchvision.ops import box_iou
 import json
 import numpy as np
 from PIL import Image
@@ -94,7 +96,7 @@ def delete_detected_labels(base_path):
 
 # deletes "detected" labels
 
-delete_detected_labels(result_dir)
+#delete_detected_labels(result_dir)
 
 def calculate_accuracy(detected_polygons, ground_truth_polygons):
     """Calculate accuracy by comparing detected polygons to ground truth."""

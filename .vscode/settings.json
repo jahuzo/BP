@@ -1,5 +1,6 @@
 {
     "python.analysis.extraPaths": [
-        "./_annotation"
+        "./_annotation",
+        "./_annotation/methods"
     ]
 }

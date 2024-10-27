@@ -4,7 +4,7 @@ sys.path.append(r'/mnt/c/Users/jahuz/Links/BP/_annotation')
 
 # header file basically
 from paths import *
-
+from backbones import *
 # Debugging and checks
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
@@ -119,49 +119,35 @@ def load_data(data_dir):
     return torch.stack(train_images), torch.stack(train_labels)  # Make sure to stack train_labels
 
 
-class BackboneCNN(nn.Module):
-    def __init__(self):
-        super(BackboneCNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(2, 2)
-
-    def forward(self, x):
-        c1 = F.relu(self.conv1(x))
-        p1 = self.pool(c1)
-        c2 = F.relu(self.conv2(p1))
-        p2 = self.pool(c2)
-        c3 = F.relu(self.conv3(p2))
-        p3 = self.pool(c3)
-        c4 = F.relu(self.conv4(p3))
-        p4 = self.pool(c4)
-        return p1, p2, p3, p4
 
 class FPN(nn.Module):
     def __init__(self):
         super(FPN, self).__init__()
-        self.lateral_p4 = nn.Conv2d(256, 128, kernel_size=1)
-        self.lateral_p3 = nn.Conv2d(128, 128, kernel_size=1)
-        self.lateral_p2 = nn.Conv2d(64, 128, kernel_size=1)
-        self.lateral_p1 = nn.Conv2d(32, 128, kernel_size=1)
+        # Adjust lateral layers to match ResNet output channels
+        self.lateral_p4 = nn.Conv2d(512, 128, kernel_size=1)  # layer4 output has 512 channels
+        self.lateral_p3 = nn.Conv2d(256, 128, kernel_size=1)  # layer3 output has 256 channels
+        self.lateral_p2 = nn.Conv2d(128, 128, kernel_size=1)  # layer2 output has 128 channels
+        self.lateral_p1 = nn.Conv2d(64, 128, kernel_size=1)   # layer1 output has 64 channels
         
         self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
         self.final_conv = nn.Conv2d(128, 128, kernel_size=3, padding=1)
 
     def forward(self, p1, p2, p3, p4):
-        p4_ = self.lateral_p4(p4)
-        p3_fused = F.relu(self.lateral_p3(p3) + self.upsample(p4_))
-        p2_fused = F.relu(self.lateral_p2(p2) + self.upsample(p3_fused))
-        p1_fused = F.relu(self.lateral_p1(p1) + self.upsample(p2_fused))
+        # Apply lateral convolutions
+        p4_ = self.lateral_p4(p4)  # Reduces channels from 512 to 128
+        p3_fused = F.relu(self.lateral_p3(p3) + self.upsample(p4_))  # Channels: 256 -> 128
+        p2_fused = F.relu(self.lateral_p2(p2) + self.upsample(p3_fused))  # Channels: 128 -> 128
+        p1_fused = F.relu(self.lateral_p1(p1) + self.upsample(p2_fused))  # Channels: 64 -> 128
+
+        # Final output after merging feature maps
         final_feature = self.final_conv(p1_fused)
         return final_feature
+
 
 class FPNModel(nn.Module):
     def __init__(self):
         super(FPNModel, self).__init__()
-        self.backbone = BackboneCNN()
+        self.backbone = ResNetBackbone()
         self.fpn = FPN()
         self.classifier = nn.Sequential(
             nn.Conv2d(128, 64, kernel_size=3, padding=1),
