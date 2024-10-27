@@ -128,6 +128,8 @@ def train_model(model, train_loader, epochs=10):
             
             # Forward pass
             loss_dict = model(images, labels)
+
+            # Calculate the combined loss using loss_dict
             losses = sum(loss for loss in loss_dict.values())
             
             # Backward pass
@@ -208,5 +210,5 @@ def infer_and_update_polygons(model, data_dir):
 
 
 # Train the model and infer 
-train_model(model, train_loader, epochs=10)
+train_model(model, train_loader, epochs=20)
 infer_and_update_polygons(model, result_dir)
