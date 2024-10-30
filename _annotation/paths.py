@@ -98,7 +98,7 @@ def delete_detected_labels(base_path):
 
 # deletes "detected" labels
 
-#delete_detected_labels(result_dir)
+delete_detected_labels(result_dir)
 
 def calculate_accuracy(detected_polygons, ground_truth_polygons):
     """Calculate accuracy by comparing detected polygons to ground truth."""

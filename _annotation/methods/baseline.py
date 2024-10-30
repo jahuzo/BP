@@ -179,6 +179,18 @@ def generate_training_samples(images, labels, num_samples=5, canvas_size=(256, 2
 
     return samples, annotations
 
+# Downsample negative samples
+def downsample_negatives(X, y):
+    negative_indices = [i for i, label in enumerate(y) if label == 0]
+    positive_indices = [i for i, label in enumerate(y) if label == 1]
+    if len(positive_indices) < len(negative_indices):
+        negative_indices = random.sample(negative_indices, len(positive_indices))
+    balanced_indices = positive_indices + negative_indices
+    random.shuffle(balanced_indices)
+    X_balanced = [X[i] for i in balanced_indices]
+    y_balanced = [y[i] for i in balanced_indices]
+    return np.array(X_balanced), np.array(y_balanced)
+
 # Generate training and test samples
 train_samples, train_annotations = generate_training_samples(train_images, train_labels, num_samples=len(train_images), canvas_size=(512, 512))
 test_samples, test_annotations = generate_training_samples(test_images, test_labels, num_samples=len(test_images), canvas_size=(512, 512))
@@ -353,7 +365,7 @@ class EnhancedCNNModel(nn.Module):
         self.bn1 = nn.BatchNorm2d(32)
         self.resblock1 = ResidualBlock(32, 32)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(0.6)  # Increased dropout rate for more regularization
 
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(64)
@@ -410,8 +422,29 @@ criterion = FocalLoss(alpha=1, gamma=2)
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 scheduler = CosineAnnealingLR(optimizer, T_max=10, eta_min=0.00001)
 
+class EarlyStopping:
+    def __init__(self, patience=5, verbose=False):
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_loss = None
+        self.early_stop = False
+
+    def __call__(self, val_loss):
+        if self.best_loss is None or val_loss < self.best_loss:
+            self.best_loss = val_loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+                if self.verbose:
+                    print("Early stopping triggered.")
+
+early_stopping = EarlyStopping(patience=5, verbose=True)
+
 # Training loop
-num_epochs = 10
+num_epochs = 15
 train_losses, val_losses = [], []
 train_accuracies, val_accuracies = [], []
 
@@ -447,7 +480,7 @@ for epoch in range(num_epochs):
     val_accuracy /= len(test_loader.dataset)
 
     # Step the scheduler # NEW!
-    scheduler.step()
+    scheduler.step(val_loss)
 
     train_losses.append(train_loss)
     val_losses.append(val_loss)
@@ -455,6 +488,10 @@ for epoch in range(num_epochs):
     val_accuracies.append(val_accuracy)
 
     print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
+    
+    early_stopping(val_loss)
+    if early_stopping.early_stop:
+        break
 
 # Plot training & validation accuracy and loss
 plt.figure(figsize=(12, 4))
@@ -482,26 +519,23 @@ plt.show()
 
 summary(model, (3, 64, 64))
 
-def infer_and_update_polygons(model, data_dir):
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.2):  # Lowered confidence threshold to 0.2
     model.eval()
     model.to(device)
 
-    # Define transforms for input image patches
     transform = transforms.Compose([
-        transforms.Resize((64, 64)),  # Resize input patch to match model training size
+        transforms.Resize((64, 64)),
         transforms.ToTensor()
     ])
 
-    # Sliding window parameters
-    window_size = 64  # Size of the window patch
-    stride = 32       # How far the window moves each time (overlap of 50%)
+    window_size = 64
+    stride = 32
 
     for folder in os.listdir(data_dir):
         if folder not in ['008', '009']:
             continue
 
         folder_path = os.path.join(data_dir, folder)
-
         if os.path.isdir(folder_path):
             image_path = os.path.join(folder_path, 'image.jpg')
             json_path = os.path.join(folder_path, 'polygons.json')
@@ -510,11 +544,9 @@ def infer_and_update_polygons(model, data_dir):
                 print(f"Image not found: {image_path}")
                 continue
 
-            # Open the input image
             input_image = Image.open(image_path).convert("RGB")
             image_width, image_height = input_image.size
 
-            # Load existing polygons if they exist, else initialize an empty list
             if os.path.exists(json_path):
                 with open(json_path, 'r') as f:
                     existing_data = json.load(f)
@@ -524,28 +556,17 @@ def infer_and_update_polygons(model, data_dir):
             detected_boxes = []
 
             with torch.no_grad():
-                # Slide over the image with the sliding window
                 for y in range(0, image_height - window_size + 1, stride):
                     for x in range(0, image_width - window_size + 1, stride):
-                        # Crop the image patch
                         patch = input_image.crop((x, y, x + window_size, y + window_size))
-                        
-                        # Transform the patch and convert to tensor
                         input_tensor = transform(patch).unsqueeze(0).to(device)
 
-                        # Get the prediction from the model
                         predictions = model(input_tensor)
-
-                        # Apply softmax to get probabilities
                         predicted_probs = torch.softmax(predictions, dim=1)
                         predicted_class = torch.argmax(predicted_probs, dim=1).item()
                         confidence = predicted_probs[0, predicted_class].item()
 
-                        # Debugging output for each patch
-                        #print(f"Patch ({x}, {y}) - Predicted class: {predicted_class}, Confidence: {confidence:.2f}")
-
-                        # If the predicted class is 1 and confidence is above a threshold, mark it as "detected"
-                        if predicted_class == 1 and confidence > 0.5:  # Lowered threshold to 0.5 for more sensitivity
+                        if predicted_class == 1 and confidence > confidence_threshold:
                             detected_box = {
                                 "label": "detected",
                                 "polygon": [
@@ -556,21 +577,16 @@ def infer_and_update_polygons(model, data_dir):
                                 ]
                             }
                             detected_boxes.append(detected_box)
-
-                            # Draw the detected box on the image for visual verification
                             draw = ImageDraw.Draw(input_image)
                             draw.rectangle([x, y, x + window_size, y + window_size], outline="red", width=2)
 
-            # Combine detected boxes with any existing data
-            if len(detected_boxes) > 0:
-                for box in detected_boxes:
-                    if box not in existing_data:
-                        existing_data.append(box)
-
-                # Save the updated list of detected polygons to the JSON file
+            if len(detected_boxes) in [1, 150]:
+                unique_boxes = {json.dumps(box, sort_keys=True): box for box in existing_data + detected_boxes}
+                updated_data = list(unique_boxes.values())
+                ndetected = len(detected_boxes)
                 with open(json_path, 'w') as f:
-                    json.dump(existing_data, f, indent=4)
-                print(f"Updated polygons saved in {json_path}")
+                    json.dump(updated_data, f, indent=4)
+                print(f"{ndetected} detected polygons saved in {json_path}")
+                
 
-# Run the inference
 infer_and_update_polygons(model, result_dir)
