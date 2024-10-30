@@ -10,11 +10,16 @@ from sklearn.model_selection import train_test_split  # Added for stratified spl
 
 import numpy as np
 import cv2
-from PIL import Image
+from PIL import Image, ImageEnhance  # Updated for augmentation
 import json
 from torch.utils.data import DataLoader, TensorDataset, random_split
 import torch
+import torch.nn as nn
+import torch.optim as optim
 import matplotlib.pyplot as plt
+
+# Added a learning rate scheduler # NEW!
+from torch.optim.lr_scheduler import StepLR
 
 data_dir = result_dir
 
@@ -53,9 +58,35 @@ def convert_bboxes_to_integers(bboxes):
         converted_bboxes.append(int_bbox)
     return converted_bboxes
 
-def load_data(data_dir):
+def augment_image(image):  # NEW!
+    """
+    Apply random augmentations to the image to improve model generalization.
+    """
+    # Randomly change brightness
+    enhancer = ImageEnhance.Brightness(image)
+    factor = random.uniform(0.6, 1.4)  # Brightness factor between 0.6 and 1.4 for more variation
+    image = enhancer.enhance(factor)
+
+    # Randomly change contrast # NEW!
+    enhancer = ImageEnhance.Contrast(image)
+    factor = random.uniform(0.8, 1.2)  # Contrast factor between 0.8 and 1.2
+    image = enhancer.enhance(factor)
+
+    # Randomly flip the image horizontally
+    if random.random() > 0.5:
+        image = image.transpose(Image.FLIP_LEFT_RIGHT)
+    
+    # Randomly rotate the image slightly
+    angle = random.uniform(-15, 15)  # Rotate between -15 and 15 degrees for more variation
+    image = image.rotate(angle)
+
+    return image
+
+def load_data(data_dir, train_folders, test_folders):
     train_images = []
     train_labels = []
+    test_images = []
+    test_labels = []
 
     for folder in os.listdir(data_dir):
         folder_path = os.path.join(data_dir, folder)
@@ -65,7 +96,11 @@ def load_data(data_dir):
             
             if os.path.isfile(image_path):
                 input_image = Image.open(image_path)
-                train_images.append(input_image)
+
+                if folder in train_folders:
+                    train_images.append(input_image)
+                elif folder in test_folders:
+                    test_images.append(input_image)
 
                 if os.path.isfile(json_path):
                     with open(json_path, 'r') as f:
@@ -76,25 +111,36 @@ def load_data(data_dir):
                     if polygons:
                         bboxes = preprocess_polygons_to_bboxes(polygons)
                         if bboxes:
-                            train_labels.append(bboxes)  # Collect all bounding boxes for the image
+                            if folder in train_folders:
+                                train_labels.append(bboxes)  # Collect all bounding boxes for the image
+                            elif folder in test_folders:
+                                test_labels.append(bboxes)
                     else:
                         print(f"No 'a' polygons found in {json_path}")
                 else:
                     print(f"Polygons file not found: {json_path}")
 
-    return train_images, train_labels
+    return train_images, train_labels, test_images, test_labels
 
-def generate_training_samples(num_samples=5, canvas_size=(256, 256), data_dir=result_dir):
+# Specify folders for training and testing
+data_dir = result_dir
+train_folders = ['001', '002', '003', '004', '005', '006', '007']  # Training folders
+test_folders = ['008', '009']  # Testing folders
+
+# Load data
+train_images, train_labels, test_images, test_labels = load_data(data_dir, train_folders, test_folders)
+
+def generate_training_samples(images, labels, num_samples=5, canvas_size=(256, 256)):
     samples = []
     annotations = []
-    
-    # Load data
-    train_images, train_labels = load_data(data_dir)
 
     for i in range(num_samples):
         # Select a random image and corresponding bounding boxes
-        img_index = random.randint(0, len(train_images) - 1)
-        input_image = train_images[img_index]
+        img_index = random.randint(0, len(images) - 1)
+        input_image = images[img_index]
+
+        # Apply augmentation to the image # NEW!
+        input_image = augment_image(input_image)
 
         # Resize image while maintaining aspect ratio, then pad to fit canvas size
         input_image.thumbnail(canvas_size, Image.LANCZOS)  # Resize maintaining aspect ratio
@@ -104,9 +150,9 @@ def generate_training_samples(num_samples=5, canvas_size=(256, 256), data_dir=re
         background.paste(input_image, (left, top))
 
         # Update bounding boxes to match the resized image position on the canvas
-        scale_x = input_image.size[0] / train_images[img_index].size[0]
-        scale_y = input_image.size[1] / train_images[img_index].size[1]
-        bboxes = train_labels[img_index]
+        scale_x = input_image.size[0] / images[img_index].size[0]
+        scale_y = input_image.size[1] / images[img_index].size[1]
+        bboxes = labels[img_index]
         bboxes = convert_bboxes_to_integers(bboxes)
         new_bboxes = []
         for bbox in bboxes:
@@ -130,13 +176,15 @@ def generate_training_samples(num_samples=5, canvas_size=(256, 256), data_dir=re
 
     return samples, annotations
 
-samples, annotations = generate_training_samples(num_samples=3, canvas_size=(512, 512))
+# Generate training and test samples
+train_samples, train_annotations = generate_training_samples(train_images, train_labels, num_samples=len(train_images), canvas_size=(512, 512))
+test_samples, test_annotations = generate_training_samples(test_images, test_labels, num_samples=len(test_images), canvas_size=(512, 512))
 
 X = []
 y = []
 image_size = (64, 64)
 
-for image, bboxes in zip(samples, annotations):
+for image, bboxes in zip(train_samples, train_annotations):
     for bbox in bboxes:
         x_min, y_min, x_max, y_max, label = bbox
         if label == 3:  # Skip blank images
@@ -150,7 +198,7 @@ for image, bboxes in zip(samples, annotations):
                 y.append(label)
 
         # Generate random negative samples near the original bounding box
-        for _ in range(1):  # Reduce negative samples per bounding box to 1
+        for _ in range(2):  # Increased negative samples per bounding box to 2 for more negatives
             shift_x = random.randint(-(64 // 2), 64 // 2)  # Corrected shift range
             shift_y = random.randint(-(64 // 2), 64 // 2)  # Corrected shift range
             new_x_min = max(0, x_min + shift_x)
@@ -182,7 +230,7 @@ for image, bboxes in zip(samples, annotations):
                     y.append(0)
 
 # Append random negative samples from the image that do not overlap with any bounding boxes
-num_random_samples = 50  # Reduce number of purely random negative samples # NEW!
+num_random_samples = 100  # Increased number of purely random negative samples to 100
 for _ in range(num_random_samples):
     new_x_min = random.randint(0, image.shape[1] - image_size[0])
     new_y_min = random.randint(0, image.shape[0] - image_size[1])
@@ -212,7 +260,7 @@ for _ in range(num_random_samples):
             X.append(resized_random_image)
             y.append(0)
 
-# Oversample positive examples to ensure better balance # NEW!
+# Oversample positive examples to ensure better balance
 positive_indices = [i for i, label in enumerate(y) if label == 1]
 num_positives = len(positive_indices)
 num_negatives = len([i for i in y if i == 0])
@@ -258,7 +306,6 @@ unique_test_labels = torch.unique(y_test_labels)
 print(f"Unique labels in training data: {unique_train_labels}")
 print(f"Unique labels in testing data: {unique_test_labels}")
 
-'''
 # Plot histograms
 plt.figure(figsize=(12, 5))
 
@@ -278,26 +325,28 @@ plt.title('Histogram of Testing Classes')
 
 plt.tight_layout()
 plt.show()
-'''
 
+# Define the PyTorch model equivalent to the provided Keras model
 class CNNModel(nn.Module):
     def __init__(self):
         super(CNNModel, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)  # Added Batch Normalization # NEW!
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.dropout = nn.Dropout(0.5)
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)  # Added Batch Normalization # NEW!
         self.fc1 = nn.Linear(64 * 16 * 16, 128)
-        self.fc2 = nn.Linear(128, 2)  # 2 classes: positive (a) and negative # UPDATED!
+        self.fc2 = nn.Linear(128, 2)  # 2 classes: positive (a) and negative
 
     def forward(self, x):
-        x = torch.relu(self.conv1(x))
+        x = torch.relu(self.bn1(self.conv1(x)))  # Apply BatchNorm after Conv layer
         x = self.pool(x)
         x = self.dropout(x)
-        x = torch.relu(self.conv2(x))
+        x = torch.relu(self.bn2(self.conv2(x)))  # Apply BatchNorm after Conv layer
         x = self.pool(x)
         x = self.dropout(x)
-        x = x.reshape(-1, 64 * 16 * 16)  # Corrected to use reshape to handle non-contiguous memory  # Flatten
+        x = x.reshape(-1, 64 * 16 * 16)  # Corrected to use reshape to handle non-contiguous memory
         x = torch.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
@@ -308,7 +357,8 @@ model = CNNModel()
 
 # Define loss function and optimizer
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.003)  # Increased learning rate to speed up training # NEW!
+scheduler = StepLR(optimizer, step_size=3, gamma=0.1)  # Added learning rate scheduler # NEW!
 
 # Training loop
 num_epochs = 10
@@ -345,6 +395,9 @@ for epoch in range(num_epochs):
             val_accuracy += accuracy(outputs, labels) * inputs.size(0)
     val_loss /= len(test_loader.dataset)
     val_accuracy /= len(test_loader.dataset)
+
+    # Step the scheduler # NEW!
+    scheduler.step()
 
     train_losses.append(train_loss)
     val_losses.append(val_loss)
