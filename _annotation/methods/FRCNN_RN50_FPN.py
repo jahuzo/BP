@@ -207,8 +207,3 @@ def infer_and_update_polygons(model, data_dir):
                             print(f"Updated polygons saved in {json_path}")
                         else:
                             print(f"No new detected polygons in {json_path}")
-
-
-# Train the model and infer 
-train_model(model, train_loader, epochs=20)
-infer_and_update_polygons(model, result_dir)

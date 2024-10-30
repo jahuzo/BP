@@ -1,133 +1,378 @@
-import cv2
+import sys
+
+# Paths import (update the path accordingly)
+sys.path.append(r'/mnt/c/Users/jahuz/Links/BP/_annotation')
+
+from paths import *
+
+import random
+from sklearn.model_selection import train_test_split  # Added for stratified splitting
+
 import numpy as np
+import cv2
+from PIL import Image
 import json
-import os
-from PIL import Image, ImageDraw
+from torch.utils.data import DataLoader, TensorDataset, random_split
+import torch
+import matplotlib.pyplot as plt
 
-def calculate_centroid(polygon):
-    """Calculate the centroid of a polygon given its vertices."""
-    x_coords = [point['x'] for point in polygon['points']]
-    y_coords = [point['y'] for point in polygon['points']]
-    centroid_x = sum(x_coords) / len(polygon['points'])
-    centroid_y = sum(y_coords) / len(polygon['points'])
-    return {'x': centroid_x, 'y': centroid_y}
+data_dir = result_dir
 
-def calculate_distance(centroid1, centroid2):
-    """Calculate the Euclidean distance between two centroids."""
-    return ((centroid1['x'] - centroid2['x'])**2 + (centroid1['y'] - centroid2['y'])**2) ** 0.5
+def calculate_bounding_box(polygon):
+    points = polygon['points']
+    if len(points) < 3:
+        raise ValueError("Polygon does not have enough points to form a bounding box.")
+    
+    x_coords = [point['x'] for point in points]
+    y_coords = [point['y'] for point in points]
+    
+    # Calculate bounding box
+    xmin = min(x_coords)
+    xmax = max(x_coords)
+    ymin = min(y_coords)
+    ymax = max(y_coords)
+    
+    return [xmin, ymin, xmax, ymax]
 
-def filter_polygons(polygons, distance):
-    """Filter out polygons that are too close to each other, based on centroid distance."""
-    filtered_polygons = []
+def preprocess_polygons_to_bboxes(polygons):
+    bboxes = []
     for polygon in polygons:
-        polygon_centroid = calculate_centroid(polygon)
-        too_close = False
-        for existing_polygon in filtered_polygons:
-            existing_polygon_centroid = calculate_centroid(existing_polygon)
-            if calculate_distance(polygon_centroid, existing_polygon_centroid) < distance:
-                too_close = True
-                break
-        if not too_close:
-            filtered_polygons.append(polygon)
-    return filtered_polygons
+        if 'points' in polygon:
+            try:
+                bbox = calculate_bounding_box(polygon)
+                bboxes.append(bbox + [1])  # Append label '1' for positive samples
+            except ValueError as e:
+                print(f"Error processing polygon: {e}")
+    return bboxes
 
-def is_far_enough(new_detection, existing_detections, min_distance):
-    """Check if new_detection is at least min_distance away from all existing_detections."""
-    for existing_detection in existing_detections:
-        for new_point in new_detection['points']:
-            for existing_point in existing_detection['points']:
-                distance = ((new_point['x'] - existing_point['x'])**2 + (new_point['y'] - existing_point['y'])**2) ** 0.5
-                if distance < min_distance:
-                    return False
-    return True
+def convert_bboxes_to_integers(bboxes):
+    converted_bboxes = []
+    for bbox in bboxes:
+        # Ensure each coordinate in bbox is converted to an integer
+        int_bbox = [int(coord) for coord in bbox[:4]] + [bbox[4]]
+        converted_bboxes.append(int_bbox)
+    return converted_bboxes
 
-def add_distant_detections(matchesAll, matches, min_distance):
-    """Add new detections to matchesAll if they are sufficiently distant from existing detections."""
-    filtered_matches = [match for match in matches if is_far_enough(match, matchesAll, min_distance)]
-    matchesAll.extend(filtered_matches)
-    return matchesAll
+def load_data(data_dir):
+    train_images = []
+    train_labels = []
 
-
-def find_matches(img, template, polygons, min_distance, scale_percent=50, threshold=0.8):  # migrate to baseline.py
-    # Convert PIL images to NumPy arrays for OpenCV processing
-    img_np = np.array(img)
-    template_np = np.array(template)
-
-    # Convert to grayscale
-    img_gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
-    template_gray = cv2.cvtColor(template_np, cv2.COLOR_BGR2GRAY)
-    
-    # Resize images for faster processing
-    width = int(img_gray.shape[1] * scale_percent / 100)
-    height = int(img_gray.shape[0] * scale_percent / 100)
-    dim = (width, height)
-
-    img_resized = cv2.resize(img_gray, dim, interpolation=cv2.INTER_AREA)
-    template_resized = cv2.resize(template_gray, dim, interpolation=cv2.INTER_AREA)
-
-    # Perform template matching using cross-correlation
-    res = cv2.matchTemplate(img_resized, template_resized, cv2.TM_CCORR_NORMED)
-    
-    # Set a threshold for detecting matches
-    loc = np.where(res >= threshold)
-    
-    new_polygons = []
-    for pt in zip(*loc[::-1]):  # loc gives us the top-left corner of the match
-        match_center = (pt[0] + template_resized.shape[1]//2, pt[1] + template_resized.shape[0]//2)  # Calculate match center
-        # If far enough, add to new polygons list
-        new_polygons.append({
-            "label": "detected",
-            "points": [
-                {"x": int(pt[0]), "y": int(pt[1])},
-                {"x": int(pt[0]) + int(template_resized.shape[1]), "y": int(pt[1])},
-                {"x": int(pt[0]) + int(template_resized.shape[1]), "y": int(pt[1] + template_resized.shape[0])},
-                {"x": int(pt[0]), "y": int(pt[1] + template_resized.shape[0])}
-            ]
-        })
-        
-def baseline(polygons, source_img ):
-    matchesAll = []    
-    matchesAll.extend(polygons)
+    for folder in os.listdir(data_dir):
+        folder_path = os.path.join(data_dir, folder)
+        if os.path.isdir(folder_path):
+            image_path = os.path.join(folder_path, 'image.jpg')
+            json_path = os.path.join(folder_path, 'polygons.json')
             
-    for index, polygon in enumerate(polygons):
+            if os.path.isfile(image_path):
+                input_image = Image.open(image_path)
+                train_images.append(input_image)
+
+                if os.path.isfile(json_path):
+                    with open(json_path, 'r') as f:
+                        existing_data = json.load(f)
+                    
+                    # Only use polygons labeled as "a"
+                    polygons = [polygon for polygon in existing_data if polygon['label'] == 'a']
+                    if polygons:
+                        bboxes = preprocess_polygons_to_bboxes(polygons)
+                        if bboxes:
+                            train_labels.append(bboxes)  # Collect all bounding boxes for the image
+                    else:
+                        print(f"No 'a' polygons found in {json_path}")
+                else:
+                    print(f"Polygons file not found: {json_path}")
+
+    return train_images, train_labels
+
+def generate_training_samples(num_samples=5, canvas_size=(256, 256), data_dir=result_dir):
+    samples = []
+    annotations = []
     
-        if polygon["label"] != "a":
+    # Load data
+    train_images, train_labels = load_data(data_dir)
+
+    for i in range(num_samples):
+        # Select a random image and corresponding bounding boxes
+        img_index = random.randint(0, len(train_images) - 1)
+        input_image = train_images[img_index]
+
+        # Resize image while maintaining aspect ratio, then pad to fit canvas size
+        input_image.thumbnail(canvas_size, Image.LANCZOS)  # Resize maintaining aspect ratio
+        background = Image.new('RGB', canvas_size, (255, 255, 255))  # Create a white canvas
+        left = (canvas_size[0] - input_image.size[0]) // 2
+        top = (canvas_size[1] - input_image.size[1]) // 2
+        background.paste(input_image, (left, top))
+
+        # Update bounding boxes to match the resized image position on the canvas
+        scale_x = input_image.size[0] / train_images[img_index].size[0]
+        scale_y = input_image.size[1] / train_images[img_index].size[1]
+        bboxes = train_labels[img_index]
+        bboxes = convert_bboxes_to_integers(bboxes)
+        new_bboxes = []
+        for bbox in bboxes:
+            xmin, ymin, xmax, ymax, label = bbox
+            xmin = int(left + xmin * scale_x)
+            xmax = int(left + xmax * scale_x)
+            ymin = int(top + ymin * scale_y)
+            ymax = int(top + ymax * scale_y)
+            new_bboxes.append([xmin, ymin, xmax, ymax, label])
+
+        # Convert image to numpy array
+        image = np.array(background)
+
+        # Draw the bounding boxes
+        for bbox in new_bboxes:
+            xmin, ymin, xmax, ymax, label = bbox
+            cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 0, 255), thickness=3)
+
+        samples.append(image)
+        annotations.append(new_bboxes)
+
+    return samples, annotations
+
+samples, annotations = generate_training_samples(num_samples=3, canvas_size=(512, 512))
+
+X = []
+y = []
+image_size = (64, 64)
+
+for image, bboxes in zip(samples, annotations):
+    for bbox in bboxes:
+        x_min, y_min, x_max, y_max, label = bbox
+        if label == 3:  # Skip blank images
             continue
-            
-        # Convert polygon points to a format suitable for PIL (list of tuples)
-        print(polygon)
-        polygon_points = [(int(point["x"]), int(point["y"])) for point in polygon['points']]
-        
-        # Determine the bounding box of the polygon
-        min_x = min(point[0] for point in polygon_points)
-        min_y = min(point[1] for point in polygon_points)
-        max_x = max(point[0] for point in polygon_points)
-        max_y = max(point[1] for point in polygon_points)
-        
-        # Create a new image with white background
-        img_size = (max_x - min_x, max_y - min_y)
-        img = Image.new("RGB", img_size, "white")
-        
-        # Calculate the offset to crop the source image correctly
-        offset = (min_x, min_y)
-        
-        # Crop the source image to the bounding box of the polygon
-        source_img_cropped = source_img.crop((min_x, min_y, max_x, max_y))
-        
-        # Paste the cropped source image onto the new image
-        img.paste(source_img_cropped, (0, 0))
-        
-        # Draw the polygon on the new image
-        draw = ImageDraw.Draw(img)
-        draw.polygon(polygon_points, outline="red")
-        
-        matches = find_matches(source_img, img, polygons, 50)
-        #print(matches)
-        #matchesAll = merge_if_far_enough(matchesAll, matches, min_distance)
-        #print_structure(matches)
-        #matchesAll.extend(matches)
-        min_distance = 500  # Define the minimum distance
-        matchesAll = add_distant_detections(matchesAll, matches, min_distance)
+        # Crop and resize the image to the target size
+        if x_max > x_min and y_max > y_min:  # Ensure valid bounding box
+            cropped_image = image[y_min:y_max, x_min:x_max]
+            if cropped_image.size > 0:  # Check if cropped image is not empty
+                resized_image = cv2.resize(cropped_image, (64, 64))
+                X.append(resized_image)
+                y.append(label)
 
-    distance_threshold = 10  # Define the minimum distance between polygon centers
-    matchesAll = filter_polygons(matchesAll, distance_threshold)
+        # Generate random negative samples near the original bounding box
+        for _ in range(1):  # Reduce negative samples per bounding box to 1
+            shift_x = random.randint(-(64 // 2), 64 // 2)  # Corrected shift range
+            shift_y = random.randint(-(64 // 2), 64 // 2)  # Corrected shift range
+            new_x_min = max(0, x_min + shift_x)
+            new_y_min = max(0, y_min + shift_y)
+            new_x_max = min(image.shape[1], new_x_min + (x_max - x_min))
+            new_y_max = min(image.shape[0], new_y_min + (y_max - y_min))
+
+            # Calculate overlap with all existing bounding boxes
+            overlaps = []
+            for other_bbox in bboxes:
+                other_x_min, other_y_min, other_x_max, other_y_max, _ = other_bbox
+                intersection_x_min = max(other_x_min, new_x_min)
+                intersection_y_min = max(other_y_min, new_y_min)
+                intersection_x_max = min(other_x_max, new_x_max)
+                intersection_y_max = min(other_y_max, new_y_max)
+
+                intersection_area = max(0, intersection_x_max - intersection_x_min) * max(0, intersection_y_max - intersection_y_min)
+                other_area = (other_x_max - other_x_min) * (other_y_max - other_y_min)
+
+                overlap = intersection_area / other_area if other_area > 0 else 0
+                overlaps.append(overlap)
+
+            # Only add negative sample if it doesn't overlap more than 50% with any existing bounding box
+            if all(overlap <= 0.5 for overlap in overlaps):
+                negative_cropped_image = image[new_y_min:new_y_max, new_x_min:new_x_max]
+                if negative_cropped_image.size > 0:  # Check if cropped image is not empty
+                    resized_negative_image = cv2.resize(negative_cropped_image, (64, 64))
+                    X.append(resized_negative_image)
+                    y.append(0)
+
+# Append random negative samples from the image that do not overlap with any bounding boxes
+num_random_samples = 50  # Reduce number of purely random negative samples # NEW!
+for _ in range(num_random_samples):
+    new_x_min = random.randint(0, image.shape[1] - image_size[0])
+    new_y_min = random.randint(0, image.shape[0] - image_size[1])
+    new_x_max = new_x_min + image_size[0]
+    new_y_max = new_y_min + image_size[1]
+
+    # Calculate overlap with all existing bounding boxes
+    overlaps = []
+    for bbox in bboxes:
+        other_x_min, other_y_min, other_x_max, other_y_max, _ = bbox
+        intersection_x_min = max(other_x_min, new_x_min)
+        intersection_y_min = max(other_y_min, new_y_min)
+        intersection_x_max = min(other_x_max, new_x_max)
+        intersection_y_max = min(other_y_max, new_y_max)
+
+        intersection_area = max(0, intersection_x_max - intersection_x_min) * max(0, intersection_y_max - intersection_y_min)
+        other_area = (other_x_max - other_x_min) * (other_y_max - other_y_min)
+
+        overlap = intersection_area / other_area if other_area > 0 else 0
+        overlaps.append(overlap)
+
+    # Only add negative sample if it doesn't overlap with any existing bounding box
+    if all(overlap == 0 for overlap in overlaps):
+        random_cropped_image = image[new_y_min:new_y_max, new_x_min:new_x_max]
+        if random_cropped_image.size > 0:  # Check if cropped image is not empty
+            resized_random_image = cv2.resize(random_cropped_image, (64, 64))
+            X.append(resized_random_image)
+            y.append(0)
+
+# Oversample positive examples to ensure better balance # NEW!
+positive_indices = [i for i, label in enumerate(y) if label == 1]
+num_positives = len(positive_indices)
+num_negatives = len([i for i in y if i == 0])
+
+if num_positives < num_negatives:
+    oversample_factor = num_negatives // num_positives
+    X_positives = [X[i] for i in positive_indices]
+    y_positives = [y[i] for i in positive_indices]
+    X.extend(X_positives * oversample_factor)
+    y.extend(y_positives * oversample_factor)
+
+X = np.array(X)
+y = np.array(y)
+
+# Normalize images (assuming X is image data)
+X = X / 255.0
+
+# Convert X and y to PyTorch tensors
+X_tensor = torch.tensor(X, dtype=torch.float32)  # For image data, use float32
+y_tensor = torch.tensor(y, dtype=torch.long)     # For classification labels, use long
+
+# Perform stratified split using sklearn's train_test_split
+train_indices, test_indices = train_test_split(np.arange(len(y_tensor)), test_size=0.2, random_state=42, stratify=y)
+train_dataset = torch.utils.data.Subset(TensorDataset(X_tensor, y_tensor), train_indices)
+test_dataset = torch.utils.data.Subset(TensorDataset(X_tensor, y_tensor), test_indices)
+
+# Optional: create DataLoaders if you want to iterate over data in batches
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+# Print information about the datasets
+print(f"Number of training samples: {len(train_dataset)}")
+print(f"Number of testing samples: {len(test_dataset)}")
+print(f"Number of training labels: {len(train_dataset)}")
+print(f"Number of testing labels: {len(test_dataset)}")
+
+# Getting unique labels in training and testing datasets
+y_train_labels = y_tensor[train_indices]
+y_test_labels = y_tensor[test_indices]
+unique_train_labels = torch.unique(y_train_labels)
+unique_test_labels = torch.unique(y_test_labels)
+
+print(f"Unique labels in training data: {unique_train_labels}")
+print(f"Unique labels in testing data: {unique_test_labels}")
+
+'''
+# Plot histograms
+plt.figure(figsize=(12, 5))
+
+# Training set histogram
+plt.subplot(1, 2, 1)
+plt.hist(y_train_labels.numpy(), bins=np.arange(-0.5, len(torch.unique(y_train_labels))), rwidth=0.8, color='b', alpha=0.7)
+plt.xlabel('Class Label')
+plt.ylabel('Frequency')
+plt.title('Histogram of Training Classes')
+
+# Testing set histogram
+plt.subplot(1, 2, 2)
+plt.hist(y_test_labels.numpy(), bins=np.arange(-0.5, len(torch.unique(y_test_labels))), rwidth=0.8, color='g', alpha=0.7)
+plt.xlabel('Class Label')
+plt.ylabel('Frequency')
+plt.title('Histogram of Testing Classes')
+
+plt.tight_layout()
+plt.show()
+'''
+
+class CNNModel(nn.Module):
+    def __init__(self):
+        super(CNNModel, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout = nn.Dropout(0.5)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        self.fc1 = nn.Linear(64 * 16 * 16, 128)
+        self.fc2 = nn.Linear(128, 2)  # 2 classes: positive (a) and negative # UPDATED!
+
+    def forward(self, x):
+        x = torch.relu(self.conv1(x))
+        x = self.pool(x)
+        x = self.dropout(x)
+        x = torch.relu(self.conv2(x))
+        x = self.pool(x)
+        x = self.dropout(x)
+        x = x.reshape(-1, 64 * 16 * 16)  # Corrected to use reshape to handle non-contiguous memory  # Flatten
+        x = torch.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return torch.softmax(x, dim=1)
+
+# Instantiate the model
+model = CNNModel()
+
+# Define loss function and optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+# Training loop
+num_epochs = 10
+train_losses, val_losses = [], []
+train_accuracies, val_accuracies = [], []
+
+def accuracy(preds, labels):
+    _, pred_classes = torch.max(preds, 1)
+    return (pred_classes == labels).sum().item() / labels.size(0)
+
+for epoch in range(num_epochs):
+    model.train()
+    running_loss = 0.0
+    running_accuracy = 0.0
+    for inputs, labels in train_loader:
+        optimizer.zero_grad()
+        outputs = model(inputs.permute(0, 3, 1, 2))  # Permute dimensions for PyTorch [batch, channels, height, width]
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item() * inputs.size(0)
+        running_accuracy += accuracy(outputs, labels) * inputs.size(0)
+    train_loss = running_loss / len(train_loader.dataset)
+    train_accuracy = running_accuracy / len(train_loader.dataset)
+
+    model.eval()
+    val_loss, val_accuracy = 0.0, 0.0
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            outputs = model(inputs.permute(0, 3, 1, 2))
+            loss = criterion(outputs, labels)
+            val_loss += loss.item() * inputs.size(0)
+            val_accuracy += accuracy(outputs, labels) * inputs.size(0)
+    val_loss /= len(test_loader.dataset)
+    val_accuracy /= len(test_loader.dataset)
+
+    train_losses.append(train_loss)
+    val_losses.append(val_loss)
+    train_accuracies.append(train_accuracy)
+    val_accuracies.append(val_accuracy)
+
+    print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
+
+# Plot training & validation accuracy and loss
+plt.figure(figsize=(12, 4))
+
+# Plot accuracy
+plt.subplot(1, 2, 1)
+plt.plot(train_accuracies, label='Train Accuracy')
+plt.plot(val_accuracies, label='Validation Accuracy')
+plt.title('Model Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+# Plot loss
+plt.subplot(1, 2, 2)
+plt.plot(train_losses, label='Train Loss')
+plt.plot(val_losses, label='Validation Loss')
+plt.title('Model Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+
+plt.tight_layout()
+plt.show()
