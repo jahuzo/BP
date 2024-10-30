@@ -8,6 +8,9 @@ from paths import *
 import random
 from sklearn.model_selection import train_test_split  # Added for stratified splitting
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
+
 import numpy as np
 import cv2
 from PIL import Image, ImageEnhance  # Updated for augmentation
@@ -327,38 +330,85 @@ plt.tight_layout()
 plt.show()
 
 # Define the PyTorch model equivalent to the provided Keras model
-class CNNModel(nn.Module):
-    def __init__(self):
-        super(CNNModel, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)  # Added Batch Normalization # NEW!
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dropout = nn.Dropout(0.5)
-        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)  # Added Batch Normalization # NEW!
-        self.fc1 = nn.Linear(64 * 16 * 16, 128)
-        self.fc2 = nn.Linear(128, 2)  # 2 classes: positive (a) and negative
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
 
     def forward(self, x):
-        x = torch.relu(self.bn1(self.conv1(x)))  # Apply BatchNorm after Conv layer
+        residual = x
+        out = torch.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += residual
+        out = torch.relu(out)
+        return out
+
+class EnhancedCNNModel(nn.Module):
+    def __init__(self):
+        super(EnhancedCNNModel, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.resblock1 = ResidualBlock(32, 32)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout = nn.Dropout(0.5)
+
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.resblock2 = ResidualBlock(64, 64)
+
+        example_input = torch.zeros(1, 3, 64, 64)
+        self.flattened_size = self._get_flattened_size(example_input)
+
+        self.fc1 = nn.Linear(self.flattened_size, 128)
+        self.fc2 = nn.Linear(128, 2)
+
+    def _get_flattened_size(self, x):
+        x = torch.relu(self.bn1(self.conv1(x)))
+        x = self.resblock1(x)
+        x = self.pool(x)
+        x = torch.relu(self.bn2(self.conv2(x)))
+        x = self.resblock2(x)
+        x = self.pool(x)
+        return x.view(1, -1).size(1)
+
+    def forward(self, x):
+        x = torch.relu(self.bn1(self.conv1(x)))
+        x = self.resblock1(x)
         x = self.pool(x)
         x = self.dropout(x)
-        x = torch.relu(self.bn2(self.conv2(x)))  # Apply BatchNorm after Conv layer
+        x = torch.relu(self.bn2(self.conv2(x)))
+        x = self.resblock2(x)
         x = self.pool(x)
         x = self.dropout(x)
-        x = x.reshape(-1, 64 * 16 * 16)  # Corrected to use reshape to handle non-contiguous memory
+        x = x.reshape(x.size(0), -1)
         x = torch.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
         return torch.softmax(x, dim=1)
 
-# Instantiate the model
-model = CNNModel()
+# Instantiate the enhanced model
+model = EnhancedCNNModel()
 
-# Define loss function and optimizer
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.003)  # Increased learning rate to speed up training # NEW!
-scheduler = StepLR(optimizer, step_size=3, gamma=0.1)  # Added learning rate scheduler # NEW!
+# Define the loss function (Focal Loss) and optimizer
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1, gamma=2):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.ce = nn.CrossEntropyLoss()
+
+    def forward(self, inputs, targets):
+        logpt = -self.ce(inputs, targets)
+        pt = torch.exp(logpt)
+        focal_loss = -((1 - pt) ** self.gamma) * logpt
+        return self.alpha * focal_loss
+
+criterion = FocalLoss(alpha=1, gamma=2)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+scheduler = CosineAnnealingLR(optimizer, T_max=10, eta_min=0.00001)
 
 # Training loop
 num_epochs = 10
@@ -429,3 +479,98 @@ plt.legend()
 
 plt.tight_layout()
 plt.show()
+
+summary(model, (3, 64, 64))
+
+def infer_and_update_polygons(model, data_dir):
+    model.eval()
+    model.to(device)
+
+    # Define transforms for input image patches
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),  # Resize input patch to match model training size
+        transforms.ToTensor()
+    ])
+
+    # Sliding window parameters
+    window_size = 64  # Size of the window patch
+    stride = 32       # How far the window moves each time (overlap of 50%)
+
+    for folder in os.listdir(data_dir):
+        if folder not in ['008', '009']:
+            continue
+
+        folder_path = os.path.join(data_dir, folder)
+
+        if os.path.isdir(folder_path):
+            image_path = os.path.join(folder_path, 'image.jpg')
+            json_path = os.path.join(folder_path, 'polygons.json')
+
+            if not os.path.isfile(image_path):
+                print(f"Image not found: {image_path}")
+                continue
+
+            # Open the input image
+            input_image = Image.open(image_path).convert("RGB")
+            image_width, image_height = input_image.size
+
+            # Load existing polygons if they exist, else initialize an empty list
+            if os.path.exists(json_path):
+                with open(json_path, 'r') as f:
+                    existing_data = json.load(f)
+            else:
+                existing_data = []
+
+            detected_boxes = []
+
+            with torch.no_grad():
+                # Slide over the image with the sliding window
+                for y in range(0, image_height - window_size + 1, stride):
+                    for x in range(0, image_width - window_size + 1, stride):
+                        # Crop the image patch
+                        patch = input_image.crop((x, y, x + window_size, y + window_size))
+                        
+                        # Transform the patch and convert to tensor
+                        input_tensor = transform(patch).unsqueeze(0).to(device)
+
+                        # Get the prediction from the model
+                        predictions = model(input_tensor)
+
+                        # Apply softmax to get probabilities
+                        predicted_probs = torch.softmax(predictions, dim=1)
+                        predicted_class = torch.argmax(predicted_probs, dim=1).item()
+                        confidence = predicted_probs[0, predicted_class].item()
+
+                        # Debugging output for each patch
+                        #print(f"Patch ({x}, {y}) - Predicted class: {predicted_class}, Confidence: {confidence:.2f}")
+
+                        # If the predicted class is 1 and confidence is above a threshold, mark it as "detected"
+                        if predicted_class == 1 and confidence > 0.5:  # Lowered threshold to 0.5 for more sensitivity
+                            detected_box = {
+                                "label": "detected",
+                                "polygon": [
+                                    {"x": x, "y": y},
+                                    {"x": x + window_size, "y": y},
+                                    {"x": x + window_size, "y": y + window_size},
+                                    {"x": x, "y": y + window_size}
+                                ]
+                            }
+                            detected_boxes.append(detected_box)
+
+                            # Draw the detected box on the image for visual verification
+                            draw = ImageDraw.Draw(input_image)
+                            draw.rectangle([x, y, x + window_size, y + window_size], outline="red", width=2)
+
+            # Combine detected boxes with any existing data
+            if len(detected_boxes) > 0:
+                for box in detected_boxes:
+                    if box not in existing_data:
+                        existing_data.append(box)
+
+                # Save the updated list of detected polygons to the JSON file
+                with open(json_path, 'w') as f:
+                    json.dump(existing_data, f, indent=4)
+                print(f"Updated polygons saved in {json_path}")
+
+# Run the inference
+infer_and_update_polygons(model, result_dir)
