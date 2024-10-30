@@ -156,10 +156,7 @@ train_model(model, train_loader, epochs=10)
 # Inference section
 def infer_and_update_polygons(model, data_dir):
     model.eval()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
-
-    threshold = 0.2  # Lowered threshold to increase detection sensitivity # NEW!  # Threshold for detection confidence # NEW!
 
     for folder in os.listdir(data_dir):
         if folder not in ['008', '009']:
@@ -186,40 +183,27 @@ def infer_and_update_polygons(model, data_dir):
 
             with torch.no_grad():
                 predictions = model(input_tensor)
-                probabilities = torch.softmax(predictions, dim=1)[0]  # Get the softmax probabilities # NEW!
-                positive_probability = probabilities[1].item()  # Probability for the positive class # NEW!
+                if len(predictions) > 0:
+                    prediction = predictions[0]
+                    if len(prediction['boxes']) > 0:
+                        # Take the first bounding box (assuming only one 'a' per image)
+                        box = prediction['boxes'][0].cpu().numpy()
+                        xmin, ymin, xmax, ymax = box
 
-                print(f"Prediction probabilities for {image_path}: {probabilities}")
-                print(f"Positive probability: {positive_probability}")  # Additional debug print # NEW!  # Debug print for probabilities # NEW!
+                        detected_box = {
+                            "label": "detected",
+                            "polygon": [
+                                {"x": int(xmin), "y": int(ymin)},
+                                {"x": int(xmax), "y": int(ymin)},
+                                {"x": int(xmax), "y": int(ymax)},
+                                {"x": int(xmin), "y": int(ymax)}
+                            ]
+                        }
 
-                if positive_probability >= threshold  # Adjusted detection condition # NEW!:  # Detected positive class based on threshold # NEW!
-                    # Add a bounding box similar in size to 'a' # NEW!
-                    bounding_box_size = 64  # Using the same size as training example # NEW!
-                    center_x, center_y = input_image.width // 2, input_image.height // 2
-                    xmin = max(0, center_x - bounding_box_size // 2)
-                    ymin = max(0, center_y - bounding_box_size // 2)
-                    xmax = min(input_image.width, center_x + bounding_box_size // 2)
-                    ymax = min(input_image.height, center_y + bounding_box_size // 2)
-
-                    detected_box = {
-                        "label": "detected",
-                        "polygon": [
-                            {"x": xmin, "y": ymin},
-                            {"x": xmax, "y": ymin},
-                            {"x": xmax, "y": ymax},
-                            {"x": xmin, "y": ymax}
-                        ]
-                    }
-
-                    if detected_box not in existing_data:
-                        existing_data.append(detected_box)
-                        print(f"Adding detected bounding box to polygons: {detected_box}")
-
-                    with open(json_path, 'w') as f:
-                        json.dump(existing_data, f, indent=4)
-                    print(f"Updated polygons saved in {json_path}")
-                else:
-                    print(f"No positive detection for {image_path}")
-
-# Run inference and update polygons.json for test folders
-infer_and_update_polygons(model, data_dir)
+                        if detected_box not in existing_data:
+                            existing_data.append(detected_box)
+                            with open(json_path, 'w') as f:
+                                json.dump(existing_data, f, indent=4)
+                            print(f"Updated polygons saved in {json_path}")
+                        else:
+                            print(f"No new detected polygons in {json_path}")

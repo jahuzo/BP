@@ -590,3 +590,30 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.2):  # Low
                 
 
 infer_and_update_polygons(model, result_dir)
+
+
+# Select 5 positive and 5 negative samples
+positive_samples = [X[i] for i in range(len(y)) if y[i] == 1][:5]
+negative_samples = [X[i] for i in range(len(y)) if y[i] == 0][:5]
+
+# Plot 5 positive and 5 negative samples
+fig, axes = plt.subplots(2, 5, figsize=(15, 6))
+for i in range(5):
+    # Plot positive samples
+    axes[0, i].imshow(positive_samples[i], cmap='gray')
+    axes[0, i].set_title("Positive")
+    axes[0, i].axis("off")
+    
+    # Plot negative samples
+    axes[1, i].imshow(negative_samples[i], cmap='gray')
+    axes[1, i].set_title("Negative")
+    axes[1, i].axis("off")
+
+plt.suptitle("Sample Training Images - Positive and Negative")
+plt.show()
+
+# Print the dimensions of each training sample in X
+print("Dimensions of each training sample in X:")
+for i, sample in enumerate(X):
+    height, width = sample.shape[:2]
+    print(f"Sample {i + 1}: Height = {height}, Width = {width}")
