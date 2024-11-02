@@ -1,210 +1,208 @@
-# mandatory for paths import
 import sys
+
+# Paths import (update the path accordingly)
 sys.path.append(r'/mnt/c/Users/jahuz/Links/BP/_annotation')
 
-# header file basically
 from paths import *
+from train_gen import *
 
-# Debugging and checks
+import random
+from sklearn.model_selection import train_test_split  # Added for stratified splitting
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
-input("Press Enter to continue...")
-print("OK...moving on")
+import numpy as np
+import cv2
+from PIL import Image, ImageEnhance, ImageDraw  # Updated for augmentation
+import json
+from torch.utils.data import DataLoader, TensorDataset, random_split
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
+import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
 
-root_dir = result_dir
 
-# Custom Dataset
-class CustomDataset(Dataset):
-    def __init__(self, folders, root_dir, transform=None):
-        self.folders = folders
-        self.root_dir = root_dir
-        self.transform = transform
-        self.images = []
-        self.masks = []
-        self.load_data()
+class CNNModel(nn.Module):
+    def __init__(self, input_size=(64, 64)):
+        super(CNNModel, self).__init__()
+        
+        # Convolutional layers
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        
+        # Flattening size calculation
+        example_input = torch.zeros(1, 3, input_size[0], input_size[1])
+        self.flattened_size = self._get_flattened_size(example_input)
 
-    def load_data(self):
-        for folder in self.folders:
-            image_path = os.path.join(self.root_dir, folder, 'image.jpg')
-            json_path = os.path.join(self.root_dir, folder, 'polygons.json')
+        # Fully connected layers
+        self.fc1 = nn.Linear(self.flattened_size, 128)
+        self.fc2 = nn.Linear(128, 2)  # 2 output classes
 
-            # Load the image
-            image = Image.open(image_path)
-            image = image.convert("RGB")  # Ensure image is RGB
-            self.images.append(image)
-
-            # Load the polygons
-            with open(json_path, 'r') as f:
-                polygons = json.load(f)
-
-            # Create a mask for the polygons
-            mask = np.zeros((256, 256), dtype=np.uint8)  # Assuming original size is 256x256
-            for polygon in polygons:
-                if polygon.get('label') == 'a':
-                    points = np.array([[point['x'], point['y']] for point in polygon['points']], dtype=np.int32)
-                    cv2.fillPoly(mask, [points], 1)
-
-            self.masks.append(mask)
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, idx):
-        image = self.images[idx]
-        mask = self.masks[idx]
-
-        if self.transform:
-            image = self.transform(image)
-            mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0)  # Add channel dimension
-
-        return image, mask
-
-# Define transforms
-transform = transforms.Compose([
-    transforms.Resize((32, 32)),
-    transforms.ToTensor(),
-])
-
-# Load training and testing data
-train_folders = ['001', '002', '003', '004', '005', '006', '007']
-test_folders = ['008', '009']
-
-train_dataset = CustomDataset(train_folders, root_dir, transform=transform)
-test_dataset = CustomDataset(test_folders, root_dir, transform=transform)
-
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
-
-# Define the model
-class UNet(nn.Module):
-    def __init__(self):
-        super(UNet, self).__init__()
-        self.encoder1 = self.conv_block(3, 32)
-        self.encoder2 = self.conv_block(32, 64)
-        self.encoder3 = self.conv_block(64, 128)
-        self.decoder1 = self.upconv_block(128, 64)
-        self.decoder2 = self.upconv_block(64, 32)
-        self.final_conv = nn.Conv2d(32, 1, kernel_size=1) # removed  activation='sigmoid'
-
-    def conv_block(self, in_channels, out_channels):
-        return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-        )
-
-    def upconv_block(self, in_channels, out_channels):
-        return nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-        )
+    def _get_flattened_size(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        return x.view(1, -1).size(1)
 
     def forward(self, x):
-        enc1 = self.encoder1(x)
-        enc2 = self.encoder2(enc1)
-        enc3 = self.encoder3(enc2)
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.reshape(x.size(0), -1)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x  # Return raw logits
 
-        dec1 = self.decoder1(enc3)
-        dec1 = torch.cat((dec1, enc2), dim=1)  # Skip connection
-        dec1 = self.decoder1(dec1)
+model = CNNModel(input_size=(64, 64)).to(device)
 
-        dec2 = self.decoder2(dec1)
-        dec2 = torch.cat((dec2, enc1), dim=1)  # Skip connection
-        output = self.final_conv(dec2)
+# Define Cross Entropy Loss and Optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-        return torch.sigmoid(output)
-
-# Instantiate the model
-model = UNet().to(device)
-
-# Define loss and optimizer
-criterion = nn.BCELoss()
-optimizer = optim.SGD(model.parameters(), lr=0.01)
-
-# Train the model
+# Training Loop
 num_epochs = 10
+train_losses, val_losses = [], []
+train_accuracies, val_accuracies = [], []
+
+def accuracy(preds, labels):
+    _, pred_classes = torch.max(preds, 1)
+    return (pred_classes == labels).sum().item() / labels.size(0)
+
 for epoch in range(num_epochs):
     model.train()
-    for images, masks in train_loader:
-        images, masks = images.to(device), masks.to(device)
-        
+    running_loss = 0.0
+    running_accuracy = 0.0
+    for inputs, labels in train_loader:
+        inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, masks)
+        outputs = model(inputs.permute(0, 3, 1, 2))
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
 
-    print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}")
+        running_loss += loss.item() * inputs.size(0)
+        running_accuracy += accuracy(outputs, labels) * inputs.size(0)
+    train_loss = running_loss / len(train_loader.dataset)
+    train_accuracy = running_accuracy / len(train_loader.dataset)
 
-def calculate_metrics(outputs, masks):
-    # Binarize outputs
-    predicted = (outputs > 0.5).float()
+    model.eval()
+    val_loss, val_accuracy = 0.0, 0.0
+    with torch.no_grad():
+        for inputs, labels in val_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs.permute(0, 3, 1, 2))
+            loss = criterion(outputs, labels)
+            val_loss += loss.item() * inputs.size(0)
+            val_accuracy += accuracy(outputs, labels) * inputs.size(0)
+    val_loss /= len(val_loader.dataset)
+    val_accuracy /= len(val_loader.dataset)
+
+    train_losses.append(train_loss)
+    val_losses.append(val_loss)
+    train_accuracies.append(train_accuracy)
+    val_accuracies.append(val_accuracy)
+
+    print(f"Epoch {epoch+1}/{num_epochs}, "
+          f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}, "
+          f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
     
-    # Flatten the predicted and true masks for metric calculation
-    predicted_flat = predicted.view(-1).cpu()
-    masks_flat = masks.view(-1).cpu()
 
-    # Calculate True Positives, False Positives, True Negatives, False Negatives
-    TP = ((predicted_flat == 1) & (masks_flat == 1)).sum().item()
-    TN = ((predicted_flat == 0) & (masks_flat == 0)).sum().item()
-    FP = ((predicted_flat == 1) & (masks_flat == 0)).sum().item()
-    FN = ((predicted_flat == 0) & (masks_flat == 1)).sum().item()
+# Plot training & validation accuracy and loss
+plt.figure(figsize=(12, 4))
 
-    # Calculate metrics
-    IoU = TP / (TP + FP + FN) if (TP + FP + FN) > 0 else 0
-    FPR = FP / (FP + TN) if (FP + TN) > 0 else 0
-    TPR = TP / (TP + FN) if (TP + FN) > 0 else 0
-    Accuracy = (TP + TN) / (TP + TN + FP + FN) if (TP + TN + FP + FN) > 0 else 0
-    Precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+# Plot accuracy
+plt.subplot(1, 2, 1)
+plt.plot(train_accuracies, label='Train Accuracy')
+plt.plot(val_accuracies, label='Validation Accuracy')
+plt.title('Model Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
 
-    return IoU, FPR, TPR, Accuracy, Precision
+# Plot loss
+plt.subplot(1, 2, 2)
+plt.plot(train_losses, label='Train Loss')
+plt.plot(val_losses, label='Validation Loss')
+plt.title('Model Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
 
-# Evaluate the model
-model.eval()
-with torch.no_grad():
-    total_loss = 0
-    all_IoU = []
-    all_FPR = []
-    all_TPR = []
-    all_Accuracy = []
-    all_Precision = []
+plt.tight_layout()
+plt.show()
 
-    for images, masks in test_loader:
-        images, masks = images.to(device), masks.to(device)
-        outputs = model(images)
-        loss = criterion(outputs, masks)
-        total_loss += loss.item()
+#summary(model, (3, 64, 64))
 
-        # Calculate metrics for this batch
-        IoU, FPR, TPR, Accuracy, Precision = calculate_metrics(outputs, masks)
-        all_IoU.append(IoU)
-        all_FPR.append(FPR)
-        all_TPR.append(TPR)
-        all_Accuracy.append(Accuracy)
-        all_Precision.append(Precision)
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Simplified inference
+    model.eval()
+    model.to(device)
 
-average_loss = total_loss / len(test_loader)
-average_IoU = sum(all_IoU) / len(all_IoU)
-average_FPR = sum(all_FPR) / len(all_FPR)
-average_TPR = sum(all_TPR) / len(all_TPR)
-average_Accuracy = sum(all_Accuracy) / len(all_Accuracy)
-average_Precision = sum(all_Precision) / len(all_Precision)
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),
+        transforms.ToTensor()
+    ])
 
-print(f"Average Test Loss: {average_loss:.4f}")
-print(f"Average IoU: {average_IoU:.4f}")
-print(f"Average FPR: {average_FPR:.4f}")
-print(f"Average TPR (Recall): {average_TPR:.4f}")
-print(f"Average Accuracy: {average_Accuracy:.4f}")
-print(f"Average Precision: {average_Precision:.4f}")
+    window_size = 64
+    stride = 32  # Simplified stride for faster inference
 
-# Save the model
-model_dir = os.path.join(result_dir, 'model_UNet.pth')
-os.makedirs(os.path.dirname(model_dir), exist_ok=True)
-torch.save(model.state_dict(), model_dir)
+    for folder in os.listdir(data_dir):
+        if folder not in ['008', '009']:
+            continue
 
+        folder_path = os.path.join(data_dir, folder)
+        if os.path.isdir(folder_path):
+            image_path = os.path.join(folder_path, 'image.jpg')
+            json_path = os.path.join(folder_path, 'polygons.json')
 
+            if not os.path.isfile(image_path):
+                print(f"Image not found: {image_path}")
+                continue
+
+            input_image = Image.open(image_path).convert("RGB")
+            image_width, image_height = input_image.size
+
+            if os.path.exists(json_path):
+                with open(json_path, 'r') as f:
+                    existing_data = json.load(f)
+            else:
+                existing_data = []
+
+            detected_boxes = []
+
+            with torch.no_grad():
+                for y in range(0, image_height - window_size + 1, stride):
+                    for x in range(0, image_width - window_size + 1, stride):
+                        patch = input_image.crop((x, y, x + window_size, y + window_size))
+                        input_tensor = transform(patch).unsqueeze(0).to(device)
+
+                        predictions = model(input_tensor)
+                        predicted_probs = torch.softmax(predictions, dim=1)
+                        predicted_class = torch.argmax(predicted_probs, dim=1).item()
+
+                        if predicted_class == 1:
+                            detected_box = {
+                                "label": "detected",
+                                "polygon": [
+                                    {"x": x, "y": y},
+                                    {"x": x + window_size, "y": y},
+                                    {"x": x + window_size, "y": y + window_size},
+                                    {"x": x, "y": y + window_size}
+                                ]
+                            }
+                            detected_boxes.append(detected_box)
+                            draw = ImageDraw.Draw(input_image)
+                            draw.rectangle([x, y, x + window_size, y + window_size], outline="red", width=2)
+
+            if detected_boxes:
+                updated_data = existing_data + detected_boxes
+                with open(json_path, 'w') as f:
+                    json.dump(updated_data, f, indent=4)
+                print(f"{len(detected_boxes)} detected polygons saved in {json_path}")
+            else:
+                print(f"No polygons detected in {image_path}")
+              
+infer_and_update_polygons(model, result_dir)
 
