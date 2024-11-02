@@ -14,14 +14,13 @@ print("Using device:", device)
 
 import numpy as np
 import cv2
-from PIL import Image, ImageEnhance, ImageDraw  # Updated for augmentation
+from PIL import Image, ImageDraw  # Updated for augmentation
 import json
 from torch.utils.data import DataLoader, TensorDataset, random_split
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 
@@ -136,7 +135,7 @@ plt.show()
 
 #summary(model, (3, 64, 64))
 
-def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Simplified inference
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Further lowered confidence threshold
     model.eval()
     model.to(device)
 
@@ -146,7 +145,7 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Sim
     ])
 
     window_size = 64
-    stride = 32  # Simplified stride for faster inference
+    stride = 96  # Keeping stride to ensure sufficient coverage
 
     for folder in os.listdir(data_dir):
         if folder not in ['008', '009']:
@@ -181,8 +180,11 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Sim
                         predictions = model(input_tensor)
                         predicted_probs = torch.softmax(predictions, dim=1)
                         predicted_class = torch.argmax(predicted_probs, dim=1).item()
+                        confidence = predicted_probs[0, predicted_class].item()
 
-                        if predicted_class == 1:
+                        print(f"Predicted Class: {predicted_class}, Confidence: {confidence}, Location: ({x}, {y})")  # Log detection details
+
+                        if predicted_class == 1 and confidence > confidence_threshold:
                             detected_box = {
                                 "label": "detected",
                                 "polygon": [
@@ -196,13 +198,19 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Sim
                             draw = ImageDraw.Draw(input_image)
                             draw.rectangle([x, y, x + window_size, y + window_size], outline="red", width=2)
 
-            if detected_boxes:
-                updated_data = existing_data + detected_boxes
+            # Filter unique boxes with some overlap tolerance (slightly relaxed)
+            unique_boxes = []
+            for box in detected_boxes:
+                if all(not (abs(box['polygon'][0]['x'] - ub['polygon'][0]['x']) < window_size * 0.75 and
+                            abs(box['polygon'][0]['y'] - ub['polygon'][0]['y']) < window_size * 0.75) for ub in unique_boxes):
+                    unique_boxes.append(box)
+
+            if unique_boxes:
+                updated_data = existing_data + unique_boxes
                 with open(json_path, 'w') as f:
                     json.dump(updated_data, f, indent=4)
-                print(f"{len(detected_boxes)} detected polygons saved in {json_path}")
+                print(f"{len(unique_boxes)} detected polygons saved in {json_path}")
             else:
                 print(f"No polygons detected in {image_path}")
               
 infer_and_update_polygons(model, result_dir)
-

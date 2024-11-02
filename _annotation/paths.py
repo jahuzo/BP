@@ -96,7 +96,7 @@ def delete_detected_labels(base_path):
         else:
             print(f"File not found: {json_path}")
 
-# deletes "detected" labels
+# deletes "detected" labels, currently implemented in simple_image.py
 
 #delete_detected_labels(result_dir)
 
