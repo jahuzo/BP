@@ -25,66 +25,6 @@ import matplotlib.pyplot as plt
 # Added a learning rate scheduler # NEW!
 from torch.optim.lr_scheduler import StepLR
 
-data_dir = result_dir
-
-# Normalize images (assuming X is image data)
-X_train = X_train / 255.0
-X_test = X_test / 255.0
-
-# Convert X and y to PyTorch tensors
-X_train_tensor = torch.tensor(X_train, dtype=torch.float32)  # For image data, use float32
-y_train_tensor = torch.tensor(y_train, dtype=torch.long)     # For classification labels, use long
-X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
-y_test_tensor = torch.tensor(y_test, dtype=torch.long)
-
-# Perform stratified split using sklearn's train_test_split
-train_indices, val_indices = train_test_split(np.arange(len(y_train_tensor)), test_size=0.2, random_state=42, stratify=y_train)
-train_dataset = torch.utils.data.Subset(TensorDataset(X_train_tensor, y_train_tensor), train_indices)
-val_dataset = torch.utils.data.Subset(TensorDataset(X_train_tensor, y_train_tensor), val_indices)
-test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
-
-# Optional: create DataLoaders if you want to iterate over data in batches
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-
-# Print information about the datasets
-print(f"Number of training samples: {len(train_dataset)}")
-print(f"Number of validation samples: {len(val_dataset)}")
-print(f"Number of testing samples: {len(test_dataset)}")
-
-# Getting unique labels in training and testing datasets
-y_train_labels = y_train_tensor[train_indices]
-y_val_labels = y_train_tensor[val_indices]
-y_test_labels = y_test_tensor
-
-unique_train_labels = torch.unique(y_train_labels)
-unique_val_labels = torch.unique(y_val_labels)
-unique_test_labels = torch.unique(y_test_labels)
-
-print(f"Unique labels in training data: {unique_train_labels}")
-print(f"Unique labels in validation data: {unique_val_labels}")
-print(f"Unique labels in testing data: {unique_test_labels}")
-
-# Plot histograms
-plt.figure(figsize=(12, 5))
-
-# Training set histogram
-plt.subplot(1, 2, 1)
-plt.hist(y_train_labels.numpy(), bins=np.arange(-0.5, len(torch.unique(y_train_labels))), rwidth=0.8, color='b', alpha=0.7)
-plt.xlabel('Class Label')
-plt.ylabel('Frequency')
-plt.title('Histogram of Training Classes')
-
-# Testing set histogram
-plt.subplot(1, 2, 2)
-plt.hist(y_test_labels.numpy(), bins=np.arange(-0.5, len(torch.unique(y_test_labels))), rwidth=0.8, color='g', alpha=0.7)
-plt.xlabel('Class Label')
-plt.ylabel('Frequency')
-plt.title('Histogram of Testing Classes')
-
-plt.tight_layout()
-plt.show()
 
 # Define the PyTorch model equivalent to the provided Keras model
 class ResidualBlock(nn.Module):

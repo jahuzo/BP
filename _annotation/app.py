@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 # script imports
 from paths import cur_dir, dir_path
-from methods.baseline import *
+from CNN_enhanced import *
 
 # simple function to get the current working directory 
 def jump_to_script_directory():
@@ -95,7 +95,7 @@ def predict():
     source_img_path = os.path.join(app.static_folder, dir_path, 'image.jpg')
     source_img = Image.open(source_img_path)
 
-    baseline(polygons, source_img)
+    
     
     
 @app.route('/submit-polygons', methods=['POST'])
