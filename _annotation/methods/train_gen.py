@@ -1,4 +1,4 @@
-import sys
+import sys 
 
 # Paths import (update the path accordingly)
 sys.path.append(r'/mnt/c/Users/jahuz/Links/BP/_annotation')
@@ -11,6 +11,10 @@ from PIL import Image, ImageEnhance, ImageDraw  # Updated for augmentation
 import json
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+import random
+import os
+import torch
+from torch.utils.data import TensorDataset, DataLoader
 
 data_dir = result_dir
 
@@ -73,7 +77,7 @@ def load_data(data_dir, train_folders, test_folders):
 
     for folder in os.listdir(data_dir):
         folder_path = os.path.join(data_dir, folder)
-        if os.path.isdir(folder_path):
+        if os.path.isdir(folder_path) and folder in train_folders + test_folders:
             image_path = os.path.join(folder_path, 'image.jpg')
             json_path = os.path.join(folder_path, 'polygons.json')
             
@@ -113,13 +117,11 @@ test_folders = ['008', '009']  # Testing folders
 # Load data
 train_images, train_labels, test_images, test_labels = load_data(data_dir, train_folders, test_folders)
 
-def generate_positive_negative_samples(images, labels, num_samples=5, canvas_size=(256, 256)):
+def generate_positive_negative_samples(images, labels, num_samples=100, canvas_size=(256, 256)):
     X = []
     y = []
 
-    for i in range(num_samples):
-        # Select a random image and corresponding bounding boxes
-        img_index = random.randint(0, len(images) - 1)
+    for img_index in range(len(images)):
         input_image = images[img_index]
         bboxes = labels[img_index]
 
@@ -127,7 +129,10 @@ def generate_positive_negative_samples(images, labels, num_samples=5, canvas_siz
         image_np = np.array(input_image)
 
         # Generate positive samples from bounding boxes labeled as 'a'
+        positive_sample_count = 0
         for bbox in bboxes:
+            if positive_sample_count >= 40:  # Increase count of positive samples
+                break
             x_min, y_min, x_max, y_max, label = bbox
             if label == 1:
                 if x_max > x_min and y_max > y_min:  # Ensure valid bounding box
@@ -139,36 +144,71 @@ def generate_positive_negative_samples(images, labels, num_samples=5, canvas_siz
                             augmented_image = augment_image(Image.fromarray(resized_image))
                             X.append(np.array(augmented_image))
                             y.append(1)  # Positive sample
+                            positive_sample_count += 1
 
-        # Generate negative samples from regions not containing 'a'
-        for _ in range(2 * len(bboxes)):  # Generate more negatives for balance
-            x_min = random.randint(0, image_np.shape[1] - 64)
-            y_min = random.randint(0, image_np.shape[0] - 64)
-            x_max = x_min + 64
-            y_max = y_min + 64
+        # Generate negative samples from regions near or partially overlapping with positive samples
+        for bbox in bboxes:
+            x_min, y_min, x_max, y_max, label = bbox
+            if label == 1:
+                positive_area = (x_max - x_min) * (y_max - y_min)
+                # Generate nearby negative samples
+                for _ in range(60):  # Increased number of nearby negative samples
+                    neg_x_min = max(0, x_min - random.randint(15, 45))
+                    neg_y_min = max(0, y_min - random.randint(15, 45))
+                    neg_x_max = min(image_np.shape[1], x_max + random.randint(15, 45))
+                    neg_y_max = min(image_np.shape[0], y_max + random.randint(15, 45))
 
-            # Ensure the generated negative sample does not overlap with any positive bounding box
-            overlaps = [
-                not (x_max <= bbox[0] or x_min >= bbox[2] or y_max <= bbox[1] or y_min >= bbox[3])
-                for bbox in bboxes
-            ]
+                    # Ensure valid bounding box and minimal overlap
+                    if neg_x_max > neg_x_min and neg_y_max > neg_y_min:
+                        cropped_image = image_np[int(neg_y_min):int(neg_y_max), int(neg_x_min):int(neg_x_max)]
+                        # Ensure the cropped region does not contain more than 20% of the positive bounding box
+                        overlap_area = max(0, min(x_max, neg_x_max) - max(x_min, neg_x_min)) * max(0, min(y_max, neg_y_max) - max(y_min, neg_y_min))
+                        if overlap_area <= 0.2 * positive_area:
+                            if cropped_image.size > 0:
+                                resized_image = cv2.resize(cropped_image, (64, 64), interpolation=cv2.INTER_NEAREST)
+                                augmented_image = augment_image(Image.fromarray(resized_image), brightness_factor=(0.95, 1.05), contrast_factor=(0.95, 1.05))
+                                X.append(np.array(augmented_image))
+                                y.append(0)  # Negative sample
 
-            if not any(overlaps):
-                if x_max <= image_np.shape[1] and y_max <= image_np.shape[0]:
-                    negative_cropped_image = image_np[int(y_min):int(y_max), int(x_min):int(x_max)]
-                    if negative_cropped_image.size > 0:
-                        resized_negative_image = cv2.resize(negative_cropped_image, (64, 64), interpolation=cv2.INTER_NEAREST)
-                        # Apply minimal augmentation to negative samples to enhance variety
-                        augmented_negative_image = augment_image(Image.fromarray(resized_negative_image), rotation_range=(0, 0), brightness_factor=(0.95, 1.05), contrast_factor=(0.95, 1.05))
-                        X.append(np.array(augmented_negative_image))
-                        y.append(0)  # Negative sample
+                # Generate partially overlapping negative samples
+                for _ in range(40):  # Increased number of partially overlapping negative samples
+                    overlap_x_min = max(0, x_min + random.randint(-30, 10))
+                    overlap_y_min = max(0, y_min + random.randint(-30, 10))
+                    overlap_x_max = min(image_np.shape[1], x_max + random.randint(-10, 30))
+                    overlap_y_max = min(image_np.shape[0], y_max + random.randint(-10, 30))
+
+                    # Ensure valid bounding box and partial overlap
+                    if overlap_x_max > overlap_x_min and overlap_y_max > overlap_y_min:
+                        cropped_image = image_np[int(overlap_y_min):int(overlap_y_max), int(overlap_x_min):int(overlap_x_max)]
+                        # Ensure the cropped region does not contain more than 20% of the positive bounding box
+                        overlap_area = max(0, min(x_max, overlap_x_max) - max(x_min, overlap_x_min)) * max(0, min(y_max, overlap_y_max) - max(y_min, overlap_y_min))
+                        if overlap_area <= 0.2 * positive_area:
+                            if cropped_image.size > 0:
+                                resized_image = cv2.resize(cropped_image, (64, 64), interpolation=cv2.INTER_NEAREST)
+                                augmented_image = augment_image(Image.fromarray(resized_image), brightness_factor=(0.95, 1.05), contrast_factor=(0.95, 1.05))
+                                X.append(np.array(augmented_image))
+                                y.append(0)  # Negative sample
+
+        # Generate more randomly selected negative samples to ensure balance
+        for _ in range(100):  # Increased number of random negative samples
+            rand_x_min = random.randint(0, image_np.shape[1] - 64)
+            rand_y_min = random.randint(0, image_np.shape[0] - 64)
+            rand_x_max = rand_x_min + 64
+            rand_y_max = rand_y_min + 64
+
+            if rand_x_max <= image_np.shape[1] and rand_y_max <= image_np.shape[0]:
+                cropped_image = image_np[rand_y_min:rand_y_max, rand_x_min:rand_x_max]
+                if cropped_image.size > 0:
+                    resized_image = cv2.resize(cropped_image, (64, 64), interpolation=cv2.INTER_NEAREST)
+                    augmented_image = augment_image(Image.fromarray(resized_image), brightness_factor=(0.9, 1.1), contrast_factor=(0.9, 1.1))
+                    X.append(np.array(augmented_image))
+                    y.append(0)  # Negative sample
 
     return np.array(X), np.array(y)
 
 # Generate training and test samples
 X_train, y_train = generate_positive_negative_samples(train_images, train_labels, num_samples=len(train_images), canvas_size=(512, 512))
 X_test, y_test = generate_positive_negative_samples(test_images, test_labels, num_samples=len(test_images), canvas_size=(512, 512))
-
 
 # Select 5 positive and 5 negative samples
 positive_samples = [X_train[i] for i in range(len(y_train)) if y_train[i] == 1][:5]
