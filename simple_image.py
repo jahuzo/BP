@@ -72,6 +72,8 @@ def main(directory):
 
 if __name__ == "__main__":
     # Change the directory here (e.g., '001', '002', ... '007')
-    directory = os.path.join(result_dir, '009') # Change the directory here
+    current_folder = '009'
+    directory = os.path.join(result_dir, current_folder) # Change the directory here
     main(directory)
-    delete_detected_labels(result_dir) # added to delete past labels
+    
+    #delete_detected_labels(result_dir) # added to delete past labels, moved into method loop

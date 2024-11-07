@@ -212,5 +212,6 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Fur
                 print(f"{len(unique_boxes)} detected polygons saved in {json_path}")
             else:
                 print(f"No polygons detected in {image_path}")
-              
+            
+delete_detected_labels(result_dir)  #clear json file
 infer_and_update_polygons(model, result_dir)

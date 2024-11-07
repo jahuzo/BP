@@ -1,93 +1,96 @@
-import numpy as np
+import sys
 
-def compute_iou(polygon1, polygon2):
-    # Calculate the intersection area
-    intersection_area = 0
-    for i in range(len(polygon1['points'])):
-        for j in range(len(polygon2['points'])):
-            x1, y1 = polygon1['points'][i]['x'], polygon1['points'][i]['y']
-            x2, y2 = polygon2['points'][j]['x'], polygon2['points'][j]['y']
-            # Implement intersection area calculation here
-            # This is a placeholder for the actual intersection logic
-            pass
-    # Calculate the union area
-    union_area = 0  # Placeholder for union area calculation
-    iou = intersection_area / union_area if union_area != 0 else 0
+# Paths import (update the path accordingly)
+sys.path.append(r'/mnt/c/Users/jahuz/Links/BP/_annotation')
+
+from paths import *
+
+import json
+from shapely.geometry import Polygon
+
+
+def calculate_iou(polygon1_points, polygon2_points):
+    """
+    Calculate the Intersection over Union (IoU) between two polygons.
+    Each polygon is defined by a list of points, where each point is a dictionary with 'x' and 'y' keys.
+    """
+    # Convert points to (x, y) tuples for shapely
+    poly1 = Polygon([(point['x'], point['y']) for point in polygon1_points])
+    poly2 = Polygon([(point['x'], point['y']) for point in polygon2_points])
+    
+    # Calculate intersection and union areas
+    intersection_area = poly1.intersection(poly2).area
+    union_area = poly1.union(poly2).area
+    
+    # Calculate IoU
+    iou = intersection_area / union_area if union_area > 0 else 0
     return iou
 
-def compute_iou(polygon1, polygon2):
-    # Calculate the intersection area
-    intersection_area = 0
-    for i in range(len(polygon1['points'])):
-        for j in range(len(polygon2['points'])):
-            x1, y1 = polygon1['points'][i]['x'], polygon1['points'][i]['y']
-            x2, y2 = polygon1['points'][(i + 1) % len(polygon1['points'])]['x'], polygon1['points'][(i + 1) % len(polygon1['points'])]['y']
-            x3, y3 = polygon2['points'][j]['x'], polygon2['points'][j]['y']
-            x4, y4 = polygon2['points'][(j + 1) % len(polygon2['points'])]['x'], polygon2['points'][(j + 1) % len(polygon2['points'])]['y']
-            
-            intersection_area += compute_intersection_area(x1, y1, x2, y2, x3, y3, x4, y4)
+def count_true_detections(json_file_path, threshold=0.2):
+    """
+    Load the JSON file, calculate IoU between every "a" and "detected" label,
+    print the highest IoU for each detected polygon, count true detections, 
+    and calculate precision and recall based on the threshold.
+    """
+    # Load the JSON file
+    with open(json_file_path, 'r') as file:
+        data = json.load(file)
     
-    # Calculate the union area
-    polygon1_area = calculate_polygon_area(polygon1)
-    polygon2_area = calculate_polygon_area(polygon2)
-    union_area = polygon1_area + polygon2_area - intersection_area
+    # Separate "a" and "detected" polygons
+    a_polygons = [item['points'] for item in data if item['label'] == "a"]
+    detected_polygons = [item['polygon'] for item in data if item['label'] == "detected"]
     
-    # Calculate the IoU
-    iou = intersection_area / union_area if union_area != 0 else 0
-    return iou
+    # Initialize counts
+    true_positives = 0
+    false_positives = 0
 
-def compute_intersection_area(x1, y1, x2, y2, x3, y3, x4, y4):
-    # Calculate the intersection area between two line segments
-    x = max(min(x1, x2), min(x3, x4))
-    y = max(min(y1, y2), min(y3, y4))
-    w = min(max(x1, x2), max(x3, x4)) - x
-    h = min(max(y1, y2), max(y3, y4)) - y
-    if w < 0 or h < 0:
-        return 0
-    return w * h
+    # Keep track of which ground truth polygons have been matched
+    matched_gt_indices = set()
 
-def calculate_polygon_area(polygon):
-    # Calculate the area of a polygon using the shoelace formula
-    area = 0
-    for i in range(len(polygon['points'])):
-        x1, y1 = polygon['points'][i]['x'], polygon['points'][i]['y']
-        x2, y2 = polygon['points'][(i + 1) % len(polygon['points'])]['x'], polygon['points'][(i + 1) % len(polygon['points'])]['y']
-        area += (x1 * y2 - x2 * y1)
-    return abs(area) / 2
+    # Loop through each detected polygon
+    for det_index, detected_polygon in enumerate(detected_polygons):
+        max_iou = 0  # Track the maximum IoU for this detected polygon
+        matched_gt_index = -1  # Index of the matched ground truth polygon
 
-def aggregate_iou(detected_polygons, labeled_polygons): # compares each detected polygon with each labeled polygon
-    iou_values = []
-    for d_polygon in detected_polygons:
-        best_iou = 0
-        for l_polygon in labeled_polygons:
-            iou = compute_iou(d_polygon, l_polygon)
-            if iou > best_iou:
-                best_iou = iou
-        iou_values.append(best_iou)
+        # Compare with each "a" polygon
+        for a_index, a_polygon in enumerate(a_polygons):
+            if a_index in matched_gt_indices:
+                continue  # Skip already matched ground truth polygons
+
+            # Calculate IoU between this detected and "a" polygon
+            iou = calculate_iou(a_polygon, detected_polygon)
+            if iou > max_iou:
+                max_iou = iou
+                matched_gt_index = a_index  # Potential match
+
+        # Print IoU for this detection
+        print(f"Detection {det_index + 1}: Highest IoU = {max_iou:.4f}")
+        
+        # Determine if it is a true or false positive
+        if max_iou >= threshold and matched_gt_index != -1:
+            print(f"Detection {det_index + 1} is a True Detection")
+            true_positives += 1
+            matched_gt_indices.add(matched_gt_index)  # Mark this ground truth as matched
+        else:
+            print(f"Detection {det_index + 1} is a False Detection")
+            false_positives += 1
+
+    # Calculate False Negatives
+    false_negatives = len(a_polygons) - len(matched_gt_indices)
     
-    # Calculate the average IoU if there are any IoU values, else return 0
-    return np.mean(iou_values) if iou_values else 0
+    # Calculate and print precision and recall
+    total_detections = true_positives + false_positives
+    precision = (true_positives / total_detections) * 100 if total_detections > 0 else 0
+    recall = (true_positives / (true_positives + false_negatives)) * 100 if (true_positives + false_negatives) > 0 else 0
+    print(f"Total number of true detections (TP): {true_positives}")
+    print(f"Total number of false detections (FP): {false_positives}")
+    print(f"Total number of false negatives (FN): {false_negatives}")
+    print(f"Precision: {precision:.2f}%")
+    print(f"Recall: {recall:.2f}%")
+    return precision, recall
 
-
-def stat_calc(matchesAll):
-    #IoU
-    detected_polygons = [polygon for polygon in matchesAll if polygon["label"] == "detected"]
-    labeled_polygons = [polygon for polygon in matchesAll if polygon["label"] == "a"]
-    iou = aggregate_iou(detected_polygons, labeled_polygons)
-    #FPR
-    #fpr = fp/(fp+tn)
-
-    #TPR
-    #tpr = tp/(tp+fn)
-
-    #Precision
-    #prec = tp/(tp+fp)
-    
-    #Accuracy
-    #acc = (tp+tn)/(tp+tn+fp+fn)
-    
-    #Recall
-    #rec = tp/(tp+fn)
-    
-    #return iou, fpr, tpr, prec, acc, rec
-    return iou
+# Example usage
+json_file_path = os.path.join(result_dir, '009', 'polygons.json')    
+print(json_file_path)
+result = count_true_detections(json_file_path, threshold=0.2)
+#print("Number of true detections:", result)
