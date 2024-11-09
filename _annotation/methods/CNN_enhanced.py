@@ -39,7 +39,8 @@ class ResidualBlock(nn.Module):
         residual = x
         out = torch.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
-        out += residual
+        if residual.shape == out.shape:
+            out += residual  # Ensure residual match the output shape
         out = torch.relu(out)
         return out
 
@@ -50,11 +51,13 @@ class EnhancedCNNModel(nn.Module):
         self.bn1 = nn.BatchNorm2d(32)
         self.resblock1 = ResidualBlock(32, 32)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dropout = nn.Dropout(0.6)  # Increased dropout rate for more regularization
+        self.dropout = nn.Dropout(0.5)  # Adjusted dropout rate for regularization
 
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(64)
         self.resblock2 = ResidualBlock(64, 64)
+
+        self.resblock3 = ResidualBlock(64, 64)  # Adding an additional residual block for deeper learning
 
         example_input = torch.zeros(1, 3, 64, 64)
         self.flattened_size = self._get_flattened_size(example_input)
@@ -68,6 +71,7 @@ class EnhancedCNNModel(nn.Module):
         x = self.pool(x)
         x = torch.relu(self.bn2(self.conv2(x)))
         x = self.resblock2(x)
+        x = self.resblock3(x)
         x = self.pool(x)
         return x.view(1, -1).size(1)
 
@@ -78,34 +82,23 @@ class EnhancedCNNModel(nn.Module):
         x = self.dropout(x)
         x = torch.relu(self.bn2(self.conv2(x)))
         x = self.resblock2(x)
+        x = self.resblock3(x)
         x = self.pool(x)
         x = self.dropout(x)
         x = x.reshape(x.size(0), -1)
         x = torch.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
-        return torch.softmax(x, dim=1)
+        return x
 
 # Instantiate the enhanced model
 model = EnhancedCNNModel()
+model = model.to(device)  # Ensure model is moved to the appropriate device
 
-# Define the loss function (Focal Loss) and optimizer
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=1, gamma=2):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.ce = nn.CrossEntropyLoss()
-
-    def forward(self, inputs, targets):
-        logpt = -self.ce(inputs, targets)
-        pt = torch.exp(logpt)
-        focal_loss = -((1 - pt) ** self.gamma) * logpt
-        return self.alpha * focal_loss
-
-criterion = FocalLoss(alpha=1, gamma=2)
+# Define the loss function (CrossEntropyLoss) and optimizer
+criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = CosineAnnealingLR(optimizer, T_max=10, eta_min=0.00001)
+scheduler = StepLR(optimizer, step_size=5, gamma=0.5)  # Adjusted learning rate scheduler
 
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):
@@ -128,8 +121,8 @@ class EarlyStopping:
 
 early_stopping = EarlyStopping(patience=5, verbose=True)
 
-# Training loop
-num_epochs = 15
+# Training Loop
+num_epochs = 10
 train_losses, val_losses = [], []
 train_accuracies, val_accuracies = [], []
 
@@ -142,8 +135,9 @@ for epoch in range(num_epochs):
     running_loss = 0.0
     running_accuracy = 0.0
     for inputs, labels in train_loader:
+        inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = model(inputs.permute(0, 3, 1, 2))  # Permute dimensions for PyTorch [batch, channels, height, width]
+        outputs = model(inputs.permute(0, 3, 1, 2))  # Ensure correct input shape for Conv2D
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -157,26 +151,24 @@ for epoch in range(num_epochs):
     val_loss, val_accuracy = 0.0, 0.0
     with torch.no_grad():
         for inputs, labels in val_loader:
-            outputs = model(inputs.permute(0, 3, 1, 2))
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs.permute(0, 3, 1, 2))  # Ensure correct input shape for Conv2D
             loss = criterion(outputs, labels)
             val_loss += loss.item() * inputs.size(0)
             val_accuracy += accuracy(outputs, labels) * inputs.size(0)
     val_loss /= len(val_loader.dataset)
     val_accuracy /= len(val_loader.dataset)
 
-    # Step the scheduler # NEW!
-    scheduler.step(val_loss)
-
     train_losses.append(train_loss)
     val_losses.append(val_loss)
     train_accuracies.append(train_accuracy)
     val_accuracies.append(val_accuracy)
 
-    print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
+    print(f"Epoch {epoch+1}/{num_epochs}, "
+          f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}, "
+          f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
     
-    early_stopping(val_loss)
-    if early_stopping.early_stop:
-        break
+    scheduler.step()
 
 # Plot training & validation accuracy and loss
 plt.figure(figsize=(12, 4))
@@ -204,7 +196,9 @@ plt.show()
 
 #summary(model, (3, 64, 64))
 
-def infer_and_update_polygons(model, data_dir, confidence_threshold=0.2):  # Lowered confidence threshold to 0.2
+import torchvision
+
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.7):  # Increased confidence threshold
     model.eval()
     model.to(device)
 
@@ -214,7 +208,9 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.2):  # Low
     ])
 
     window_size = 64
-    stride = 32
+    stride = 32  # Reduced stride for better coverage
+
+    min_box_size = 10  # Minimum size of detected box to filter out small noise
 
     for folder in os.listdir(data_dir):
         if folder not in ['008', '009']:
@@ -252,28 +248,37 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.2):  # Low
                         confidence = predicted_probs[0, predicted_class].item()
 
                         if predicted_class == 1 and confidence > confidence_threshold:
-                            detected_box = {
-                                "label": "detected",
-                                "polygon": [
-                                    {"x": x, "y": y},
-                                    {"x": x + window_size, "y": y},
-                                    {"x": x + window_size, "y": y + window_size},
-                                    {"x": x, "y": y + window_size}
-                                ]
-                            }
-                            detected_boxes.append(detected_box)
-                            draw = ImageDraw.Draw(input_image)
-                            draw.rectangle([x, y, x + window_size, y + window_size], outline="red", width=2)
+                            box_width = window_size
+                            box_height = window_size
+                            if box_width >= min_box_size and box_height >= min_box_size:
+                                detected_boxes.append({
+                                    "x1": x, "y1": y, 
+                                    "x2": x + window_size, "y2": y + window_size,
+                                    "score": confidence
+                                })
 
-            if len(detected_boxes) in [1, 150]:
-                unique_boxes = {json.dumps(box, sort_keys=True): box for box in existing_data + detected_boxes}
-                updated_data = list(unique_boxes.values())
-                ndetected = len(detected_boxes)
+            # Apply NMS
+            if detected_boxes:
+                boxes_tensor = torch.tensor([[box['x1'], box['y1'], box['x2'], box['y2'], box['score']] for box in detected_boxes])
+                nms_indices = torchvision.ops.nms(boxes_tensor[:, :4], boxes_tensor[:, 4], iou_threshold=0.6)  # Increased IoU threshold
+                unique_boxes = [detected_boxes[i] for i in nms_indices]
+
+                # Convert back to JSON format and save
+                updated_data = existing_data + [{
+                    "label": "detected",
+                    "polygon": [
+                        {"x": box['x1'], "y": box['y1']},
+                        {"x": box['x2'], "y": box['y1']},
+                        {"x": box['x2'], "y": box['y2']},
+                        {"x": box['x1'], "y": box['y2']}
+                    ]
+                } for box in unique_boxes]
+
                 with open(json_path, 'w') as f:
                     json.dump(updated_data, f, indent=4)
-                print(f"{ndetected} detected polygons saved in {json_path}")
+                print(f"{len(unique_boxes)} detected polygons saved in {json_path}")
             else:
                 print(f"No polygons detected in {image_path}")
-              
+            
+delete_detected_labels(result_dir)  #clear json file
 infer_and_update_polygons(model, result_dir)
-

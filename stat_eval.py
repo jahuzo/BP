@@ -26,11 +26,11 @@ def calculate_iou(polygon1_points, polygon2_points):
     iou = intersection_area / union_area if union_area > 0 else 0
     return iou
 
-def count_true_detections(json_file_path, threshold=0.2):
+def count_true_detections(json_file_path, threshold=0.5, false_positive_threshold=0.3):
     """
     Load the JSON file, calculate IoU between every "a" and "detected" label,
     print the highest IoU for each detected polygon, count true detections, 
-    and calculate precision and recall based on the threshold.
+    calculate precision and recall based on the threshold, and save blatant false positives.
     """
     # Load the JSON file
     with open(json_file_path, 'r') as file:
@@ -46,6 +46,9 @@ def count_true_detections(json_file_path, threshold=0.2):
 
     # Keep track of which ground truth polygons have been matched
     matched_gt_indices = set()
+
+    # List to store blatant false positives
+    blatant_false_positives = []
 
     # Loop through each detected polygon
     for det_index, detected_polygon in enumerate(detected_polygons):
@@ -74,6 +77,10 @@ def count_true_detections(json_file_path, threshold=0.2):
         else:
             print(f"Detection {det_index + 1} is a False Detection")
             false_positives += 1
+            # Check for blatant false positive (IoU below 0.2)
+            if max_iou < false_positive_threshold:
+                print(f"Detection {det_index + 1} is a Blatant False Positive")
+                blatant_false_positives.append({"label": "FP", "polygon": detected_polygon})
 
     # Calculate False Negatives
     false_negatives = len(a_polygons) - len(matched_gt_indices)
@@ -87,10 +94,17 @@ def count_true_detections(json_file_path, threshold=0.2):
     print(f"Total number of false negatives (FN): {false_negatives}")
     print(f"Precision: {precision:.2f}%")
     print(f"Recall: {recall:.2f}%")
+
+    # Save blatant false positives back to the JSON file
+    data.extend(blatant_false_positives)
+    with open(json_file_path, 'w') as file:
+        json.dump(data, file, indent=4)
+    print(f"Blatant false positives saved to {json_file_path}")
+    
     return precision, recall
 
 # Example usage
 json_file_path = os.path.join(result_dir, '009', 'polygons.json')    
 print(json_file_path)
-result = count_true_detections(json_file_path, threshold=0.2)
+result = count_true_detections(json_file_path, threshold=0.3)
 #print("Number of true detections:", result)

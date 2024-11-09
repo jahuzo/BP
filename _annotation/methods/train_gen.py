@@ -34,13 +34,13 @@ def calculate_bounding_box(polygon):
     
     return [xmin, ymin, xmax, ymax]
 
-def preprocess_polygons_to_bboxes(polygons):
+def preprocess_polygons_to_bboxes(polygons, label_value):
     bboxes = []
     for polygon in polygons:
         if 'points' in polygon:
             try:
                 bbox = calculate_bounding_box(polygon)
-                bboxes.append(bbox + [1])  # Append label '1' for positive samples
+                bboxes.append(bbox + [label_value])  # Append label for the sample
             except ValueError as e:
                 print(f"Error processing polygon: {e}")
     return bboxes
@@ -93,17 +93,23 @@ def load_data(data_dir, train_folders, test_folders):
                     with open(json_path, 'r') as f:
                         existing_data = json.load(f)
                     
-                    # Only use polygons labeled as "a"
-                    polygons = [polygon for polygon in existing_data if polygon['label'] == 'a']
-                    if polygons:
-                        bboxes = preprocess_polygons_to_bboxes(polygons)
-                        if bboxes:
-                            if folder in train_folders:
-                                train_labels.append(bboxes)  # Collect all bounding boxes for the image
-                            elif folder in test_folders:
-                                test_labels.append(bboxes)
+                    # Use polygons labeled as "a" as positive samples
+                    polygons_a = [polygon for polygon in existing_data if polygon['label'] == 'a']
+                    bboxes_a = preprocess_polygons_to_bboxes(polygons_a, 1)  # Label '1' for positive samples
+                    
+                    # Use polygons labeled as "FP" as negative samples
+                    polygons_fp = [polygon for polygon in existing_data if polygon['label'] == 'FP']
+                    bboxes_fp = preprocess_polygons_to_bboxes(polygons_fp, 0)  # Label '0' for negative samples
+                    
+                    bboxes = bboxes_a + bboxes_fp
+                    
+                    if bboxes:
+                        if folder in train_folders:
+                            train_labels.append(bboxes)  # Collect all bounding boxes for the image
+                        elif folder in test_folders:
+                            test_labels.append(bboxes)
                     else:
-                        print(f"No 'a' polygons found in {json_path}")
+                        print(f"No valid polygons found in {json_path}")
                 else:
                     print(f"Polygons file not found: {json_path}")
 
@@ -131,10 +137,10 @@ def generate_positive_negative_samples(images, labels, num_samples=100, canvas_s
         # Generate positive samples from bounding boxes labeled as 'a'
         positive_sample_count = 0
         for bbox in bboxes:
-            if positive_sample_count >= 40:  # Increase count of positive samples
-                break
             x_min, y_min, x_max, y_max, label = bbox
             if label == 1:
+                if positive_sample_count >= 40:  # Increase count of positive samples
+                    break
                 if x_max > x_min and y_max > y_min:  # Ensure valid bounding box
                     if x_max <= image_np.shape[1] and y_max <= image_np.shape[0]:
                         cropped_image = image_np[int(y_min):int(y_max), int(x_min):int(x_max)]
@@ -145,6 +151,19 @@ def generate_positive_negative_samples(images, labels, num_samples=100, canvas_s
                             X.append(np.array(augmented_image))
                             y.append(1)  # Positive sample
                             positive_sample_count += 1
+
+        # Generate negative samples from regions labeled as "FP"
+        for bbox in bboxes:
+            x_min, y_min, x_max, y_max, label = bbox
+            if label == 0:
+                if x_max > x_min and y_max > y_min:  # Ensure valid bounding box
+                    if x_max <= image_np.shape[1] and y_max <= image_np.shape[0]:
+                        cropped_image = image_np[int(y_min):int(y_max), int(x_min):int(x_max)]
+                        if cropped_image.size > 0:
+                            resized_image = cv2.resize(cropped_image, (64, 64), interpolation=cv2.INTER_NEAREST)
+                            augmented_image = augment_image(Image.fromarray(resized_image), brightness_factor=(0.95, 1.05), contrast_factor=(0.95, 1.05))
+                            X.append(np.array(augmented_image))
+                            y.append(0)  # Negative sample
 
         # Generate negative samples from regions near or partially overlapping with positive samples
         for bbox in bboxes:

@@ -1,124 +1,29 @@
-# mandatory for paths import
 import sys
+
+# Paths import (update the path accordingly)
 sys.path.append(r'/mnt/c/Users/jahuz/Links/BP/_annotation')
 
-# header file basically
 from paths import *
-from backbones import *
-# Debugging and checks
+from train_gen import *
+from backbones import ResNetBackbone
+
+import random
+from sklearn.model_selection import train_test_split  # Added for stratified splitting
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
-input("Press Enter to continue...")
-print("OK...moving on")
-
-root_dir = result_dir
-
-# Define label map
-label_to_index = {"a": 0}  # You can expand this as needed
-
-# Transform for input images
-transform = transforms.Compose([
-    transforms.Resize((128, 128)),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomVerticalFlip(),  # Add vertical flip
-    transforms.RandomRotation(15),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # Wider range
-    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),  # Random translation
-    transforms.ToTensor()
-])
-
-
-def iou_loss(pred_boxes, target_boxes):
-    # Compute IoU loss between predicted and target boxes
-    pred_xmin, pred_ymin, pred_xmax, pred_ymax = pred_boxes.T
-    target_xmin, target_ymin, target_xmax, target_ymax = target_boxes.T
-
-    # Compute intersection
-    inter_xmin = torch.max(pred_xmin, target_xmin)
-    inter_ymin = torch.max(pred_ymin, target_ymin)
-    inter_xmax = torch.min(pred_xmax, target_xmax)
-    inter_ymax = torch.min(pred_ymax, target_ymax)
-    inter_area = torch.clamp(inter_xmax - inter_xmin, min=0) * torch.clamp(inter_ymax - inter_ymin, min=0)
-
-    # Compute areas
-    pred_area = (pred_xmax - pred_xmin) * (pred_ymax - pred_ymin)
-    target_area = (target_xmax - target_xmin) * (target_ymax - target_ymin)
-    union_area = pred_area + target_area - inter_area
-
-    # IoU
-    iou = inter_area / union_area
-    
-    # Return a scalar loss by averaging the IoU
-    return 1 - iou.mean()  # Loss is 1 - IoU (so higher IoU leads to lower loss)
-
-def calculate_bounding_box(polygon):
-    points = polygon['points']
-    if len(points) < 3:
-        raise ValueError("Polygon does not have enough points to form a bounding box.")
-    
-    x_coords = [point['x'] for point in points]
-    y_coords = [point['y'] for point in points]
-    
-    # Calculate bounding box
-    xmin = min(x_coords)
-    xmax = max(x_coords)
-    ymin = min(y_coords)
-    ymax = max(y_coords)
-    
-    return [xmin, ymin, xmax, ymax]
-
-def preprocess_polygons_to_bboxes(polygons):
-    bboxes = []
-    for polygon in polygons:
-        if 'points' in polygon:
-            try:
-                bbox = calculate_bounding_box(polygon)
-                bboxes.append(bbox)
-            except ValueError as e:
-                print(f"Error processing polygon: {e}")
-    return bboxes
-
-def load_data(data_dir):
-    train_images = []
-    train_labels = []
-    train_polygons = []  # Store polygons associated with each image
-
-    for folder in os.listdir(data_dir):
-        folder_path = os.path.join(data_dir, folder)
-        if os.path.isdir(folder_path):
-            image_path = os.path.join(folder_path, 'image.jpg')
-            json_path = os.path.join(folder_path, 'polygons.json')
-            
-            if os.path.isfile(image_path):
-                input_image = Image.open(image_path)
-                input_image = transform(input_image)
-                train_images.append(input_image)
-
-                if os.path.isfile(json_path):
-                    with open(json_path, 'r') as f:
-                        existing_data = json.load(f)
-                    
-                    # Only use polygons labeled as "a"
-                    polygons = [polygon for polygon in existing_data if polygon['label'] == 'a']
-                    if polygons:
-                        # Convert polygons to bounding boxes
-                        bboxes = preprocess_polygons_to_bboxes(polygons)
-
-                        # Assuming each image has only one bounding box for simplicity
-                        if bboxes:
-                            # Take the first bounding box, or you can aggregate them based on your use case
-                            train_labels.append(torch.tensor(bboxes[0]).float())  # Only the first box for each image
-                        else:
-                            print(f"No bounding boxes created for {json_path}")
-                    else:
-                        print(f"No 'a' polygons found in {json_path}")
-                else:
-                    print(f"Polygons file not found: {json_path}")
-
-    return torch.stack(train_images), torch.stack(train_labels)  # Make sure to stack train_labels
-
-
+import numpy as np
+import cv2
+from PIL import Image, ImageDraw  # Updated for augmentation
+import json
+from torch.utils.data import DataLoader, TensorDataset, random_split
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
 
 class FPN(nn.Module):
     def __init__(self):
@@ -164,109 +69,163 @@ class FPNModel(nn.Module):
         output = self.classifier(fpn_features)
         return output
 
+model = FPNModel().to(device)
 
-def train_model(model, train_images, train_labels, epochs=10, batch_size=16):
-    model.to(device)
+# Define Cross Entropy Loss and Optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    criterion = nn.SmoothL1Loss()  # Still using Smooth L1 Loss for bounding box regression
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+# Training Loop
+num_epochs = 10
+train_losses, val_losses = [], []
+train_accuracies, val_accuracies = [], []
+
+def accuracy(preds, labels):
+    _, pred_classes = torch.max(preds, 1)
+    return (pred_classes == labels).sum().item() / labels.size(0)
+
+for epoch in range(num_epochs):
+    model.train()
+    running_loss = 0.0
+    running_accuracy = 0.0
+    for inputs, labels in train_loader:
+        inputs, labels = inputs.to(device), labels.to(device)
+        optimizer.zero_grad()
+        outputs = model(inputs.permute(0, 3, 1, 2))
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item() * inputs.size(0)
+        running_accuracy += accuracy(outputs, labels) * inputs.size(0)
+    train_loss = running_loss / len(train_loader.dataset)
+    train_accuracy = running_accuracy / len(train_loader.dataset)
+
+    model.eval()
+    val_loss, val_accuracy = 0.0, 0.0
+    with torch.no_grad():
+        for inputs, labels in val_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs.permute(0, 3, 1, 2))
+            loss = criterion(outputs, labels)
+            val_loss += loss.item() * inputs.size(0)
+            val_accuracy += accuracy(outputs, labels) * inputs.size(0)
+    val_loss /= len(val_loader.dataset)
+    val_accuracy /= len(val_loader.dataset)
+
+    train_losses.append(train_loss)
+    val_losses.append(val_loss)
+    train_accuracies.append(train_accuracy)
+    val_accuracies.append(val_accuracy)
+
+    print(f"Epoch {epoch+1}/{num_epochs}, "
+          f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}, "
+          f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
     
-    # Optional learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
 
-    train_dataset = torch.utils.data.TensorDataset(train_images, train_labels)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+# Plot training & validation accuracy and loss
+plt.figure(figsize=(12, 4))
 
-    for epoch in range(epochs):
-        running_loss = 0.0
-        model.train()
-        
-        for i, (images, labels) in enumerate(train_loader):
-            images, labels = images.to(device), labels.to(device)
+# Plot accuracy
+plt.subplot(1, 2, 1)
+plt.plot(train_accuracies, label='Train Accuracy')
+plt.plot(val_accuracies, label='Validation Accuracy')
+plt.title('Model Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
 
-            optimizer.zero_grad()
-            outputs = model(images)
-            
-            # Scale outputs to image dimensions
-            outputs_scaled = outputs * torch.tensor([128, 128, 128, 128]).to(device)
-            
-            # Compute loss
-            loss = criterion(outputs_scaled, labels.float())
-            loss = loss.mean()  # Ensure it's a scalar
+# Plot loss
+plt.subplot(1, 2, 2)
+plt.plot(train_losses, label='Train Loss')
+plt.plot(val_losses, label='Validation Loss')
+plt.title('Model Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
 
-            loss.backward()
-            optimizer.step()
+plt.tight_layout()
+plt.show()
 
-            running_loss += loss.item()
+#summary(model, (3, 64, 64))
 
-        # Learning rate adjustment
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
-        for epoch in range(epochs):
-            # Training code
-            scheduler.step(running_loss)
-
-        print(f"Epoch {epoch+1}, Loss: {running_loss/len(train_loader)}")
-
-    print("Training complete!")
-
-
-def infer_and_update_polygons(model, data_dir):
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Further lowered confidence threshold
     model.eval()
     model.to(device)
 
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),
+        transforms.ToTensor()
+    ])
+
+    window_size = 64
+    stride = 96  # Keeping stride to ensure sufficient coverage
+
     for folder in os.listdir(data_dir):
+        if folder not in ['008', '009']:
+            continue
+
         folder_path = os.path.join(data_dir, folder)
-        
         if os.path.isdir(folder_path):
             image_path = os.path.join(folder_path, 'image.jpg')
             json_path = os.path.join(folder_path, 'polygons.json')
-            
+
             if not os.path.isfile(image_path):
                 print(f"Image not found: {image_path}")
                 continue
 
-            input_image = Image.open(image_path)
+            input_image = Image.open(image_path).convert("RGB")
+            image_width, image_height = input_image.size
 
             if os.path.exists(json_path):
                 with open(json_path, 'r') as f:
                     existing_data = json.load(f)
             else:
                 existing_data = []
-            
-            preprocess = transforms.Compose([
-                transforms.Resize((128, 128)),
-                transforms.ToTensor(),
-            ])
-            input_tensor = preprocess(input_image).unsqueeze(0).to(device)
+
+            detected_boxes = []
 
             with torch.no_grad():
-                output = model(input_tensor)
-                bounding_box = output[0].cpu().numpy()
-                xmin, ymin, xmax, ymax = bounding_box
+                for y in range(0, image_height - window_size + 1, stride):
+                    for x in range(0, image_width - window_size + 1, stride):
+                        patch = input_image.crop((x, y, x + window_size, y + window_size))
+                        input_tensor = transform(patch).unsqueeze(0).to(device)
 
-                detected_box = {
-                    "label": "detected",
-                    "polygon": [
-                        {"x": int(xmin), "y": int(ymin)},
-                        {"x": int(xmax), "y": int(ymin)},
-                        {"x": int(xmax), "y": int(ymax)},
-                        {"x": int(xmin), "y": int(ymax)}
-                    ]
-                }
+                        predictions = model(input_tensor)
+                        predicted_probs = torch.softmax(predictions, dim=1)
+                        predicted_class = torch.argmax(predicted_probs, dim=1).item()
+                        confidence = predicted_probs[0, predicted_class].item()
 
-                if detected_box not in existing_data:
-                    existing_data.append(detected_box)
-                    with open(json_path, 'w') as f:
-                        json.dump(existing_data, f, indent=4)
-                    print(f"Updated polygons saved in {json_path}")
-                else:
-                    print(f"No new detected polygons in {json_path}")
+                        print(f"Predicted Class: {predicted_class}, Confidence: {confidence}, Location: ({x}, {y})")  # Log detection details
 
-# Load training data
-train_images, train_labels = load_data(result_dir)
+                        if predicted_class == 1 and confidence > confidence_threshold:
+                            detected_box = {
+                                "label": "detected",
+                                "polygon": [
+                                    {"x": x, "y": y},
+                                    {"x": x + window_size, "y": y},
+                                    {"x": x + window_size, "y": y + window_size},
+                                    {"x": x, "y": y + window_size}
+                                ]
+                            }
+                            detected_boxes.append(detected_box)
+                            draw = ImageDraw.Draw(input_image)
+                            draw.rectangle([x, y, x + window_size, y + window_size], outline="red", width=2)
 
-# Initialize and train model
-model = FPNModel()
-train_model(model, train_images, train_labels, epochs=10)
+            # Filter unique boxes with some overlap tolerance (slightly relaxed)
+            unique_boxes = []
+            for box in detected_boxes:
+                if all(not (abs(box['polygon'][0]['x'] - ub['polygon'][0]['x']) < window_size * 0.75 and
+                            abs(box['polygon'][0]['y'] - ub['polygon'][0]['y']) < window_size * 0.75) for ub in unique_boxes):
+                    unique_boxes.append(box)
+
+            if unique_boxes:
+                updated_data = existing_data + unique_boxes
+                with open(json_path, 'w') as f:
+                    json.dump(updated_data, f, indent=4)
+                print(f"{len(unique_boxes)} detected polygons saved in {json_path}")
+            else:
+                print(f"No polygons detected in {image_path}")
+            
+delete_detected_labels(result_dir)  #clear json file
 infer_and_update_polygons(model, result_dir)
-
