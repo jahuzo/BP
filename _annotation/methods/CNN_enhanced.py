@@ -194,23 +194,22 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-#summary(model, (3, 64, 64))
+#import torchvision
 
-import torchvision
-
-def infer_and_update_polygons(model, data_dir, confidence_threshold=0.7):  # Increased confidence threshold
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.80):  # Increased confidence threshold
     model.eval()
     model.to(device)
 
     transform = transforms.Compose([
         transforms.Resize((64, 64)),
-        transforms.ToTensor()
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Added normalization to improve accuracy
     ])
 
     window_size = 64
-    stride = 32  # Reduced stride for better coverage
+    stride = 48  # Reduced stride for more overlap, improving detection accuracy
 
-    min_box_size = 10  # Minimum size of detected box to filter out small noise
+    min_box_size = 30  # Increased minimum size of detected box to reduce small false positives
 
     for folder in os.listdir(data_dir):
         if folder not in ['008', '009']:
@@ -245,7 +244,7 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.7):  # Inc
                         predictions = model(input_tensor)
                         predicted_probs = torch.softmax(predictions, dim=1)
                         predicted_class = torch.argmax(predicted_probs, dim=1).item()
-                        confidence = predicted_probs[0, predicted_class].item()
+                        confidence = predicted_probs[0, predicted_class].item() * 1.1
 
                         if predicted_class == 1 and confidence > confidence_threshold:
                             box_width = window_size
@@ -260,7 +259,7 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.7):  # Inc
             # Apply NMS
             if detected_boxes:
                 boxes_tensor = torch.tensor([[box['x1'], box['y1'], box['x2'], box['y2'], box['score']] for box in detected_boxes])
-                nms_indices = torchvision.ops.nms(boxes_tensor[:, :4], boxes_tensor[:, 4], iou_threshold=0.6)  # Increased IoU threshold
+                nms_indices = torchvision.ops.nms(boxes_tensor[:, :4], boxes_tensor[:, 4], iou_threshold=0.55)  # Reduced IoU threshold to reduce overlapping boxes
                 unique_boxes = [detected_boxes[i] for i in nms_indices]
 
                 # Convert back to JSON format and save

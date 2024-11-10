@@ -33,6 +33,7 @@ class CNNModel(nn.Module):
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1)  # Added additional conv layer
         
         # Flattening size calculation
         example_input = torch.zeros(1, 3, input_size[0], input_size[1])
@@ -45,11 +46,13 @@ class CNNModel(nn.Module):
     def _get_flattened_size(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
+        x = self.pool(F.relu(self.conv3(x)))  # Update to include new conv layer
         return x.view(1, -1).size(1)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
+        x = self.pool(F.relu(self.conv3(x)))  # Update to include new conv layer
         x = x.reshape(x.size(0), -1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
@@ -145,7 +148,7 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Fur
     ])
 
     window_size = 64
-    stride = 96  # Keeping stride to ensure sufficient coverage
+    stride = 32  # Reduced stride to ensure more coverage and overlaps
 
     for folder in os.listdir(data_dir):
         if folder not in ['008', '009']:

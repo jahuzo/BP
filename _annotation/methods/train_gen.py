@@ -123,7 +123,7 @@ test_folders = ['008', '009']  # Testing folders
 # Load data
 train_images, train_labels, test_images, test_labels = load_data(data_dir, train_folders, test_folders)
 
-def generate_positive_negative_samples(images, labels, num_samples=100, canvas_size=(256, 256)):
+def generate_positive_negative_samples(images, labels, num_samples=100, canvas_size=(256, 256), augment_ground_truth=True):
     X = []
     y = []
 
@@ -136,21 +136,42 @@ def generate_positive_negative_samples(images, labels, num_samples=100, canvas_s
 
         # Generate positive samples from bounding boxes labeled as 'a'
         positive_sample_count = 0
+        negative_sample_count = len([bbox for bbox in bboxes if bbox[4] == 0])  # Count of negative samples
+        augmented_ground_truth_images = []
         for bbox in bboxes:
             x_min, y_min, x_max, y_max, label = bbox
             if label == 1:
-                if positive_sample_count >= 40:  # Increase count of positive samples
-                    break
-                if x_max > x_min and y_max > y_min:  # Ensure valid bounding box
-                    if x_max <= image_np.shape[1] and y_max <= image_np.shape[0]:
-                        cropped_image = image_np[int(y_min):int(y_max), int(x_min):int(x_max)]
-                        if cropped_image.size > 0:
-                            resized_image = cv2.resize(cropped_image, (64, 64), interpolation=cv2.INTER_NEAREST)
-                            # Apply minimal augmentation to avoid deforming positive samples
-                            augmented_image = augment_image(Image.fromarray(resized_image))
-                            X.append(np.array(augmented_image))
-                            y.append(1)  # Positive sample
-                            positive_sample_count += 1
+                if augment_ground_truth:
+                    # Generate original sample without modification
+                    cropped_image = image_np[int(y_min):int(y_max), int(x_min):int(x_max)]
+                    if cropped_image.size > 0:
+                        resized_image = cv2.resize(cropped_image, (64, 64), interpolation=cv2.INTER_NEAREST)
+                        X.append(np.array(resized_image))
+                        y.append(1)  # Original positive sample
+                    
+                    # Generate slightly augmented samples for the ground truths
+                    for _ in range(3):  # Create 3 slightly different augmentations
+                        aug_image = augment_image(Image.fromarray(resized_image), brightness_factor=(0.98, 1.02), contrast_factor=(0.98, 1.02))
+                        augmented_ground_truth_images.append(np.array(aug_image))
+                
+                # Increase attempts to generate positive samples
+                for _ in range(10):                
+                    if x_max > x_min and y_max > y_min:  # Ensure valid bounding box
+                        if x_max <= image_np.shape[1] and y_max <= image_np.shape[0]:
+                            cropped_image = image_np[int(y_min):int(y_max), int(x_min):int(x_max)]
+                            if cropped_image.size > 0:
+                                resized_image = cv2.resize(cropped_image, (64, 64), interpolation=cv2.INTER_NEAREST)
+                                # Apply minimal augmentation to avoid deforming positive samples
+                                augmented_image = augment_image(Image.fromarray(resized_image))
+                                X.append(np.array(augmented_image))
+                                y.append(1)  # Positive sample
+                                positive_sample_count += 1
+                                if positive_sample_count >= negative_sample_count:
+                                    break
+                                if augment_ground_truth:
+                                    for aug_image in augmented_ground_truth_images:
+                                        X.append(aug_image)
+                                        y.append(1)  # Augmented positive sample
 
         # Generate negative samples from regions labeled as "FP"
         for bbox in bboxes:
@@ -229,9 +250,15 @@ def generate_positive_negative_samples(images, labels, num_samples=100, canvas_s
 X_train, y_train = generate_positive_negative_samples(train_images, train_labels, num_samples=len(train_images), canvas_size=(512, 512))
 X_test, y_test = generate_positive_negative_samples(test_images, test_labels, num_samples=len(test_images), canvas_size=(512, 512))
 
-# Select 5 positive and 5 negative samples
-positive_samples = [X_train[i] for i in range(len(y_train)) if y_train[i] == 1][:5]
-negative_samples = [X_train[i] for i in range(len(y_train)) if y_train[i] == 0][:5]
+# Select 5 positive and 5 negative samples randomly
+positive_indices = np.where(y_train == 1)[0]
+negative_indices = np.where(y_train == 0)[0]
+
+random_positive_samples = np.random.choice(positive_indices, 5, replace=False)
+random_negative_samples = np.random.choice(negative_indices, 5, replace=False)
+
+positive_samples = [X_train[i] for i in random_positive_samples]
+negative_samples = [X_train[i] for i in random_negative_samples]
 
 # Plot 5 positive and 5 negative samples
 fig, axes = plt.subplots(2, 5, figsize=(15, 6))
