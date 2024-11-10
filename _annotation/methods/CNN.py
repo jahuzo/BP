@@ -138,7 +138,7 @@ plt.show()
 
 #summary(model, (3, 64, 64))
 
-def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Further lowered confidence threshold
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.8):  # Increased confidence threshold
     model.eval()
     model.to(device)
 
@@ -148,7 +148,7 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Fur
     ])
 
     window_size = 64
-    stride = 32  # Reduced stride to ensure more coverage and overlaps
+    stride = 48  # Increased stride to reduce number of windows analyzed
 
     for folder in os.listdir(data_dir):
         if folder not in ['008', '009']:
@@ -185,7 +185,8 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Fur
                         predicted_class = torch.argmax(predicted_probs, dim=1).item()
                         confidence = predicted_probs[0, predicted_class].item()
 
-                        print(f"Predicted Class: {predicted_class}, Confidence: {confidence}, Location: ({x}, {y})")  # Log detection details
+                        if predicted_class == 1: 
+                            print(f"Predicted Class: {predicted_class}, Confidence: {confidence}, Location: ({x}, {y})")  # Log detection details
 
                         if predicted_class == 1 and confidence > confidence_threshold:
                             detected_box = {
@@ -201,12 +202,43 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Fur
                             draw = ImageDraw.Draw(input_image)
                             draw.rectangle([x, y, x + window_size, y + window_size], outline="red", width=2)
 
-            # Filter unique boxes with some overlap tolerance (slightly relaxed)
-            unique_boxes = []
-            for box in detected_boxes:
-                if all(not (abs(box['polygon'][0]['x'] - ub['polygon'][0]['x']) < window_size * 0.75 and
-                            abs(box['polygon'][0]['y'] - ub['polygon'][0]['y']) < window_size * 0.75) for ub in unique_boxes):
-                    unique_boxes.append(box)
+            # Apply Non-Maximum Suppression (NMS)
+            def nms(boxes, overlap_thresh=0.5):  # Increased NMS threshold for more aggressive merging
+                if len(boxes) == 0:
+                    return []
+                
+                boxes_np = np.array([[box['polygon'][0]['x'], box['polygon'][0]['y'], 
+                                      box['polygon'][2]['x'], box['polygon'][2]['y']] for box in boxes])
+                
+                x1 = boxes_np[:, 0]
+                y1 = boxes_np[:, 1]
+                x2 = boxes_np[:, 2]
+                y2 = boxes_np[:, 3]
+                
+                areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+                order = np.argsort([box['label'] for box in boxes])  # Sorting based on confidence
+                
+                keep = []
+                while order.size > 0:
+                    i = order[-1]
+                    keep.append(i)
+                    
+                    xx1 = np.maximum(x1[i], x1[order[:-1]])
+                    yy1 = np.maximum(y1[i], y1[order[:-1]])
+                    xx2 = np.minimum(x2[i], x2[order[:-1]])
+                    yy2 = np.minimum(y2[i], y2[order[:-1]])
+                    
+                    w = np.maximum(0.0, xx2 - xx1 + 1)
+                    h = np.maximum(0.0, yy2 - yy1 + 1)
+                    inter = w * h
+                    
+                    iou = inter / (areas[i] + areas[order[:-1]] - inter)
+                    
+                    order = order[np.where(iou <= overlap_thresh)[0]]
+                
+                return [boxes[idx] for idx in keep]
+
+            unique_boxes = nms(detected_boxes)
 
             if unique_boxes:
                 updated_data = existing_data + unique_boxes
