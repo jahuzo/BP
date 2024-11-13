@@ -24,6 +24,18 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 
+class SEBlock(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super(SEBlock, self).__init__()
+        self.fc1 = nn.Linear(channels, channels // reduction)
+        self.fc2 = nn.Linear(channels // reduction, channels)
+
+    def forward(self, x):
+        batch, channels, _, _ = x.size()
+        squeeze = F.adaptive_avg_pool2d(x, 1).view(batch, channels)
+        excitation = torch.relu(self.fc1(squeeze))
+        excitation = torch.sigmoid(self.fc2(excitation)).view(batch, channels, 1, 1)
+        return x * excitation
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -42,9 +54,10 @@ class ResidualBlock(nn.Module):
         out = torch.relu(out)
         return out
 
-class EnhancedCNNModel(nn.Module):
+class RebuiltCNNModel(nn.Module):
     def __init__(self):
-        super(EnhancedCNNModel, self).__init__()
+        super(RebuiltCNNModel, self).__init__()
+        # Convolutional and residual blocks
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
         self.resblock1 = ResidualBlock(32, 32)
@@ -55,42 +68,49 @@ class EnhancedCNNModel(nn.Module):
         self.bn2 = nn.BatchNorm2d(64)
         self.resblock2 = ResidualBlock(64, 64)
 
-        self.resblock3 = ResidualBlock(64, 64)  # Adding an additional residual block for deeper learning
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.resblock3 = ResidualBlock(128, 128)
 
-        example_input = torch.zeros(1, 3, 64, 64)
-        self.flattened_size = self._get_flattened_size(example_input)
+        self.conv4 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, padding=1)
+        self.bn4 = nn.BatchNorm2d(256)
+        self.resblock4 = ResidualBlock(256, 256)
+        self.se_block = SEBlock(128)  # Adding SEBlock for better attention to features
 
-        self.fc1 = nn.Linear(self.flattened_size, 128)
+        # Adaptive pooling to ensure a consistent output size
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((2, 2))
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(128 * 2 * 2, 128)  # Adjust input size to match the output of adaptive pooling
         self.fc2 = nn.Linear(128, 2)
-
-    def _get_flattened_size(self, x):
-        x = torch.relu(self.bn1(self.conv1(x)))
-        x = self.resblock1(x)
-        x = self.pool(x)
-        x = torch.relu(self.bn2(self.conv2(x)))
-        x = self.resblock2(x)
-        x = self.resblock3(x)
-        x = self.pool(x)
-        return x.view(1, -1).size(1)
 
     def forward(self, x):
         x = torch.relu(self.bn1(self.conv1(x)))
         x = self.resblock1(x)
         x = self.pool(x)
         x = self.dropout(x)
+
         x = torch.relu(self.bn2(self.conv2(x)))
         x = self.resblock2(x)
-        x = self.resblock3(x)
         x = self.pool(x)
         x = self.dropout(x)
-        x = x.reshape(x.size(0), -1)
+
+        x = torch.relu(self.bn3(self.conv3(x)))
+        x = self.resblock3(x)
+        x = self.se_block(x)
+        x = torch.relu(self.bn4(self.conv4(x)))
+        x = self.resblock4(x)
+        x = self.pool(x)
+        x = self.adaptive_pool(x)
+
+        x = x.reshape(x.size(0), -1)  # Flatten the tensor
         x = torch.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
         return x
 
-# Instantiate the enhanced model
-model = EnhancedCNNModel()
+# Instantiate the rebuilt model
+model = RebuiltCNNModel().to(device)
 
 # Define Cross Entropy Loss and Optimizer
 criterion = nn.CrossEntropyLoss()
@@ -170,7 +190,7 @@ plt.show()
 
 #summary(model, (3, 64, 64))
 
-def infer_and_update_polygons(model, data_dir, confidence_threshold=0.8):  # Increased confidence threshold
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):  # Increased confidence threshold
     model.eval()
     model.to(device)
 
@@ -180,7 +200,7 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.8):  # Inc
     ])
 
     window_size = 64
-    stride = 48  # Increased stride to reduce number of windows analyzed
+    stride = 32  # Increased stride to reduce number of windows analyzed
 
     for folder in os.listdir(data_dir):
         if folder not in ['008', '009']:
