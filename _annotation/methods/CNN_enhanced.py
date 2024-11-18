@@ -14,19 +14,17 @@ print("Using device:", device)
 
 import numpy as np
 import cv2
-from PIL import Image, ImageEnhance, ImageDraw  # Updated for augmentation
+from PIL import Image, ImageDraw  # Updated for augmentation
 import json
 from torch.utils.data import DataLoader, TensorDataset, random_split
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
+import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 
-# Added a learning rate scheduler # NEW!
-from torch.optim.lr_scheduler import StepLR
 
-
-# Define the PyTorch model equivalent to the provided Keras model
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(ResidualBlock, self).__init__()
@@ -47,82 +45,49 @@ class ResidualBlock(nn.Module):
 class EnhancedCNNModel(nn.Module):
     def __init__(self):
         super(EnhancedCNNModel, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1)
+        # Convolutional and BatchNorm layers remain the same
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
         self.resblock1 = ResidualBlock(32, 32)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dropout = nn.Dropout(0.5)  # Adjusted dropout rate for regularization
+        self.dropout = nn.Dropout(0.5)
 
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(64)
         self.resblock2 = ResidualBlock(64, 64)
+        self.resblock3 = ResidualBlock(64, 64)
 
-        self.resblock3 = ResidualBlock(64, 64)  # Adding an additional residual block for deeper learning
-
-        example_input = torch.zeros(1, 3, 64, 64)
-        self.flattened_size = self._get_flattened_size(example_input)
-
-        self.fc1 = nn.Linear(self.flattened_size, 128)
+        # Use Global Average Pooling
+        self.global_pool = nn.AdaptiveAvgPool2d(1)  # Output size of 1x1
+        self.fc1 = nn.Linear(64, 128)  # Input size is now 64 after global pooling
         self.fc2 = nn.Linear(128, 2)
-
-    def _get_flattened_size(self, x):
-        x = torch.relu(self.bn1(self.conv1(x)))
-        x = self.resblock1(x)
-        x = self.pool(x)
-        x = torch.relu(self.bn2(self.conv2(x)))
-        x = self.resblock2(x)
-        x = self.resblock3(x)
-        x = self.pool(x)
-        return x.view(1, -1).size(1)
 
     def forward(self, x):
         x = torch.relu(self.bn1(self.conv1(x)))
         x = self.resblock1(x)
-        x = self.pool(x)
         x = self.dropout(x)
+
         x = torch.relu(self.bn2(self.conv2(x)))
         x = self.resblock2(x)
         x = self.resblock3(x)
-        x = self.pool(x)
         x = self.dropout(x)
-        x = x.reshape(x.size(0), -1)
+
+        x = self.global_pool(x)  # Global Average Pooling
+        x = x.view(x.size(0), -1)  # Flatten to (batch_size, 64)
+
         x = torch.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
         return x
 
 # Instantiate the enhanced model
-model = EnhancedCNNModel()
-model = model.to(device)  # Ensure model is moved to the appropriate device
+model = EnhancedCNNModel().to(device)  # Ensure model weights are moved to the same device as the input
 
-# Define the loss function (CrossEntropyLoss) and optimizer
+# Define Cross Entropy Loss and Optimizer
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = StepLR(optimizer, step_size=5, gamma=0.5)  # Adjusted learning rate scheduler
-
-class EarlyStopping:
-    def __init__(self, patience=5, verbose=False):
-        self.patience = patience
-        self.verbose = verbose
-        self.counter = 0
-        self.best_loss = None
-        self.early_stop = False
-
-    def __call__(self, val_loss):
-        if self.best_loss is None or val_loss < self.best_loss:
-            self.best_loss = val_loss
-            self.counter = 0
-        else:
-            self.counter += 1
-            if self.counter >= self.patience:
-                self.early_stop = True
-                if self.verbose:
-                    print("Early stopping triggered.")
-
-early_stopping = EarlyStopping(patience=5, verbose=True)
 
 # Training Loop
-num_epochs = 10
+num_epochs = 25
 train_losses, val_losses = [], []
 train_accuracies, val_accuracies = [], []
 
@@ -137,7 +102,9 @@ for epoch in range(num_epochs):
     for inputs, labels in train_loader:
         inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = model(inputs.permute(0, 3, 1, 2))  # Ensure correct input shape for Conv2D
+        # Add a channel dimension
+        inputs = inputs.unsqueeze(1).to(device)
+        outputs = model(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -152,10 +119,14 @@ for epoch in range(num_epochs):
     with torch.no_grad():
         for inputs, labels in val_loader:
             inputs, labels = inputs.to(device), labels.to(device)
-            outputs = model(inputs.permute(0, 3, 1, 2))  # Ensure correct input shape for Conv2D
+            # Add channel dimension if needed
+            if inputs.dim() == 3:
+                inputs = inputs.unsqueeze(1)
+            outputs = model(inputs)
             loss = criterion(outputs, labels)
             val_loss += loss.item() * inputs.size(0)
             val_accuracy += accuracy(outputs, labels) * inputs.size(0)
+
     val_loss /= len(val_loader.dataset)
     val_accuracy /= len(val_loader.dataset)
 
@@ -168,7 +139,6 @@ for epoch in range(num_epochs):
           f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}, "
           f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
     
-    scheduler.step()
 
 # Plot training & validation accuracy and loss
 plt.figure(figsize=(12, 4))
@@ -194,25 +164,22 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-#import torchvision
+#summary(model, (3, 64, 64))
 
-def infer_and_update_polygons(model, data_dir, confidence_threshold=0.80):  # Increased confidence threshold
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.6):
     model.eval()
-    model.to(device)
-
+    model = model.to(device)
+    w_size = 128
     transform = transforms.Compose([
-        transforms.Resize((64, 64)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Added normalization to improve accuracy
+        transforms.Resize((w_size, w_size)),
+        transforms.ToTensor()
     ])
 
-    window_size = 64
-    stride = 48  # Reduced stride for more overlap, improving detection accuracy
-
-    min_box_size = 30  # Increased minimum size of detected box to reduce small false positives
+    window_size = w_size
+    stride = w_size
 
     for folder in os.listdir(data_dir):
-        if folder not in ['008', '009']:
+        if folder not in true_test_folders:
             continue
 
         folder_path = os.path.join(data_dir, folder)
@@ -224,7 +191,8 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.80):  # In
                 print(f"Image not found: {image_path}")
                 continue
 
-            input_image = Image.open(image_path).convert("RGB")
+            # Convert image to grayscale
+            input_image = Image.open(image_path).convert("L")
             image_width, image_height = input_image.size
 
             if os.path.exists(json_path):
@@ -241,38 +209,68 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.80):  # In
                         patch = input_image.crop((x, y, x + window_size, y + window_size))
                         input_tensor = transform(patch).unsqueeze(0).to(device)
 
+                        # Confirm the shape of input_tensor
+                        # print(f"Input tensor shape: {input_tensor.shape}")
+
                         predictions = model(input_tensor)
                         predicted_probs = torch.softmax(predictions, dim=1)
                         predicted_class = torch.argmax(predicted_probs, dim=1).item()
-                        confidence = predicted_probs[0, predicted_class].item() * 1.1
+                        confidence = predicted_probs[0, predicted_class].item()
 
                         if predicted_class == 1 and confidence > confidence_threshold:
-                            box_width = window_size
-                            box_height = window_size
-                            if box_width >= min_box_size and box_height >= min_box_size:
-                                detected_boxes.append({
-                                    "x1": x, "y1": y, 
-                                    "x2": x + window_size, "y2": y + window_size,
-                                    "score": confidence
-                                })
+                            detected_box = {
+                                "label": "detected",
+                                "polygon": [
+                                    {"x": x, "y": y},
+                                    {"x": x + window_size, "y": y},
+                                    {"x": x + window_size, "y": y + window_size},
+                                    {"x": x, "y": y + window_size}
+                                ]
+                            }
+                            detected_boxes.append(detected_box)
+                            draw = ImageDraw.Draw(input_image)
+                            draw.rectangle([x, y, x + window_size, y + window_size], outline="red", width=2)
 
-            # Apply NMS
-            if detected_boxes:
-                boxes_tensor = torch.tensor([[box['x1'], box['y1'], box['x2'], box['y2'], box['score']] for box in detected_boxes])
-                nms_indices = torchvision.ops.nms(boxes_tensor[:, :4], boxes_tensor[:, 4], iou_threshold=0.55)  # Reduced IoU threshold to reduce overlapping boxes
-                unique_boxes = [detected_boxes[i] for i in nms_indices]
+            # Apply Non-Maximum Suppression (NMS)
+            def nms(boxes, overlap_thresh=0.2):  # Increased NMS threshold for more aggressive merging
+                if len(boxes) == 0:
+                    return []
+                
+                boxes_np = np.array([[box['polygon'][0]['x'], box['polygon'][0]['y'], 
+                                      box['polygon'][2]['x'], box['polygon'][2]['y']] for box in boxes])
+                
+                x1 = boxes_np[:, 0]
+                y1 = boxes_np[:, 1]
+                x2 = boxes_np[:, 2]
+                y2 = boxes_np[:, 3]
+                
+                areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+                order = np.argsort([box['label'] for box in boxes])  # Sorting based on confidence
+                
+                keep = []
+                while order.size > 0:
+                    i = order[-1]
+                    keep.append(i)
+                    
+                    xx1 = np.maximum(x1[i], x1[order[:-1]])
+                    yy1 = np.maximum(y1[i], y1[order[:-1]])
+                    xx2 = np.minimum(x2[i], x2[order[:-1]])
+                    yy2 = np.minimum(y2[i], y2[order[:-1]])
+                    
+                    w = np.maximum(0.0, xx2 - xx1 + 1)
+                    h = np.maximum(0.0, yy2 - yy1 + 1)
+                    inter = w * h
+                    
+                    iou = inter / (areas[i] + areas[order[:-1]] - inter)
+                    
+                    order = order[np.where(iou <= overlap_thresh)[0]]
+                
+                return [boxes[idx] for idx in keep]
 
-                # Convert back to JSON format and save
-                updated_data = existing_data + [{
-                    "label": "detected",
-                    "polygon": [
-                        {"x": box['x1'], "y": box['y1']},
-                        {"x": box['x2'], "y": box['y1']},
-                        {"x": box['x2'], "y": box['y2']},
-                        {"x": box['x1'], "y": box['y2']}
-                    ]
-                } for box in unique_boxes]
+            unique_boxes = nms(detected_boxes)
 
+            if unique_boxes:
+                updated_data = existing_data + unique_boxes
                 with open(json_path, 'w') as f:
                     json.dump(updated_data, f, indent=4)
                 print(f"{len(unique_boxes)} detected polygons saved in {json_path}")
