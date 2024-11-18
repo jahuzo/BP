@@ -97,6 +97,30 @@ def delete_detected_labels(base_path):
         else:
             print(f"File not found: {json_path}")
 
+def delete_FP_labels(base_path):
+    # Loop through folder names from 001 to 009
+    for folder_num in range(1, 10):
+        folder_name = f"{folder_num:03d}"  # Format as 001, 002, ..., 009
+        folder_path = os.path.join(base_path, folder_name)
+        json_path = os.path.join(folder_path, 'polygons.json')
+
+        # Check if the polygons.json file exists
+        if os.path.exists(json_path):
+            # Load the JSON data
+            with open(json_path, 'r') as f:
+                polygons = json.load(f)
+            
+            # Remove items with the label "FP"
+            filtered_polygons = [polygon for polygon in polygons if polygon.get('label') != 'FP']
+
+            # Write the modified data back to polygons.json
+            with open(json_path, 'w') as f:
+                json.dump(filtered_polygons, f, indent=4)
+
+            print(f"Processed: {json_path}")
+        else:
+            print(f"File not found: {json_path}")
+
 # deletes "detected" labels, currently implemented in simple_image.py
 
 #delete_detected_labels(result_dir)
