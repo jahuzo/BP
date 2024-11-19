@@ -26,7 +26,7 @@ def calculate_iou(polygon1_points, polygon2_points):
     iou = intersection_area / union_area if union_area > 0 else 0
     return iou
 
-def count_true_detections(json_file_path, threshold=0.2, false_positive_threshold=0.175):
+def count_true_detections(json_file_path, threshold=0.3, false_positive_threshold=0.2):
     """
     Load the JSON file, calculate IoU between every "a" and "detected" label,
     print the highest IoU for each detected polygon, count true detections, 
@@ -106,5 +106,5 @@ def count_true_detections(json_file_path, threshold=0.2, false_positive_threshol
 # Example usage
 json_file_path = os.path.join(result_dir, '009', 'polygons.json')    
 print(json_file_path)
-result = count_true_detections(json_file_path, threshold=0.2)
+result = count_true_detections(json_file_path)
 #print("Number of true detections:", result)

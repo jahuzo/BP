@@ -86,14 +86,13 @@ def load_data(data_dir, folders):
 
 # Data augmentation transforms
 data_augmentation_transforms = transforms.Compose([
-    transforms.RandomRotation(degrees=15),
-    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2),
-    transforms.RandomApply([transforms.RandomPerspective(distortion_scale=0.2)], p=0.5),
-    transforms.RandomApply([transforms.GaussianBlur(kernel_size=3)], p=0.3),
+    transforms.RandomRotation(degrees=10),
+    transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
+    transforms.ColorJitter(brightness=0.1, contrast=0.1),
+    transforms.RandomApply([transforms.RandomPerspective(distortion_scale=0.1)], p=0.3),
+    transforms.RandomApply([transforms.GaussianBlur(kernel_size=3)], p=0.2),
     transforms.ToTensor(),
 ])
-
 # Specify folders for training
 data_dir = result_dir
 
@@ -125,9 +124,11 @@ def calculate_iou(boxA, boxB):
     iou = interArea / float(boxAArea + boxBArea - interArea)
     return iou
 
-def generate_samples(data, augment=True, num_random_negatives=200, iou_threshold=0.3):
+def generate_samples(data, augment=True, num_random_negatives=250, iou_threshold=0.3):
     X = []
     y = []
+
+    window_size = 64  # Updated window size
 
     for (input_image, bboxes) in data:
         image_np = np.array(input_image)
@@ -142,7 +143,7 @@ def generate_samples(data, augment=True, num_random_negatives=200, iou_threshold
             if x_max > x_min and y_max > y_min:
                 if x_max <= image_np.shape[1] and y_max <= image_np.shape[0]:
                     cropped_image = input_image.crop((x_min, y_min, x_max, y_max))
-                    resized_image = cropped_image.resize((128, 128), Image.BICUBIC)
+                    resized_image = cropped_image.resize((window_size, window_size), Image.BICUBIC)
                     X.append(resized_image)
                     y.append(1)
 
@@ -159,7 +160,7 @@ def generate_samples(data, augment=True, num_random_negatives=200, iou_threshold
             if x_max > x_min and y_max > y_min:
                 if x_max <= image_np.shape[1] and y_max <= image_np.shape[0]:
                     cropped_image = input_image.crop((x_min, y_min, x_max, y_max))
-                    resized_image = cropped_image.resize((128, 128), Image.BICUBIC)
+                    resized_image = cropped_image.resize((window_size, window_size), Image.BICUBIC)
                     X.append(resized_image)
                     y.append(0)
 
@@ -172,10 +173,10 @@ def generate_samples(data, augment=True, num_random_negatives=200, iou_threshold
 
         # Generate additional random negative samples with allowable overlap
         for _ in range(num_random_negatives):
-            rand_x_min = random.randint(0, image_np.shape[1] - 128)
-            rand_y_min = random.randint(0, image_np.shape[0] - 128)
-            rand_x_max = rand_x_min + 128
-            rand_y_max = rand_y_min + 128
+            rand_x_min = random.randint(0, image_np.shape[1] - window_size)
+            rand_y_min = random.randint(0, image_np.shape[0] - window_size)
+            rand_x_max = rand_x_min + window_size
+            rand_y_max = rand_y_min + window_size
 
             if rand_x_max <= image_np.shape[1] and rand_y_max <= image_np.shape[0]:
                 # Calculate IoU with all positive bboxes
@@ -191,7 +192,7 @@ def generate_samples(data, augment=True, num_random_negatives=200, iou_threshold
                 # Include negative sample if max IoU is below threshold
                 if max_iou < iou_threshold:
                     cropped_image = input_image.crop((rand_x_min, rand_y_min, rand_x_max, rand_y_max))
-                    if cropped_image.size == (128, 128):
+                    if cropped_image.size == (window_size, window_size):
                         X.append(cropped_image)
                         y.append(0)
 

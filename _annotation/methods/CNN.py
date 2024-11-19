@@ -21,45 +21,53 @@ from train_gen import folds, test_loader, y_train
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
+plot_enable = False
+
 # Implementing the CNN model with adjustments
 class CNNModel(nn.Module):
-    def __init__(self, input_size=(128, 128)):
+    def __init__(self, input_size=(64, 64)):
         super(CNNModel, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
+        self.input_size = input_size
         
-        # Calculate flattened size
-        example_input = torch.zeros(1, 1, *input_size)
-        self.flattened_size = self._get_flattened_size(example_input)
-        
-        self.fc1 = nn.Linear(self.flattened_size, 256)
-        self.dropout = nn.Dropout(p=0.5)
-        self.fc2 = nn.Linear(256, 2)
-    
-    def _get_flattened_size(self, x):
+        self.features = nn.Sequential(
+            # First Convolutional Block
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Dropout(p=0.2),
+            nn.MaxPool2d(2),
+
+            # Second Convolutional Block
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+            nn.MaxPool2d(2),
+
+            # Third Convolutional Block
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Dropout(p=0.4),
+            nn.MaxPool2d(2),
+        )
+        self.flattened_size = self._get_flattened_size()
+        self.classifier = nn.Sequential(
+            nn.Linear(self.flattened_size, 128),
+            nn.ReLU(),
+            nn.Linear(128, 2)  # Assuming binary classification
+        )
+
+    def _get_flattened_size(self):
         with torch.no_grad():
-            x = self.pool(F.relu(self.bn1(self.conv1(x))))
-            x = self.pool(F.relu(self.bn2(self.conv2(x))))
-            x = self.pool(F.relu(self.bn3(self.conv3(x))))
-            return x.view(1, -1).size(1)
-    
+            x = torch.zeros(1, 1, self.input_size[0], self.input_size[1])
+            x = self.features(x)
+            size = x.view(1, -1).size(1)
+        return size
+
     def forward(self, x):
-        x = self.pool(F.relu(self.bn1(self.conv1(x))))
-        x = self.dropout(x)
-        x = self.pool(F.relu(self.bn2(self.conv2(x))))
-        x = self.dropout(x)
-        x = self.pool(F.relu(self.bn3(self.conv3(x))))
-        x = self.dropout(x)
-        x = x.view(-1, self.flattened_size)
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
+        x = self.features(x)
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
         return x
+
 
 # Implementing Focal Loss to handle class imbalance
 class FocalLoss(nn.Module):
@@ -92,7 +100,7 @@ print(f"Class weights: {class_weights}")
 
 for fold, (train_loader, val_loader) in enumerate(folds, 1):
     print(f'Fold {fold}')
-    model = CNNModel(input_size=(128, 128)).to(device)
+    model = CNNModel(input_size=(64, 64)).to(device)
     # Use Focal Loss with class weights
     criterion = FocalLoss(alpha=class_weights, gamma=2)
     optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
@@ -163,29 +171,30 @@ for fold, (train_loader, val_loader) in enumerate(folds, 1):
                 print("Early stopping!")
                 break
 
-    # Plot Training & Validation Accuracy and Loss for Each Fold
-    plt.figure(figsize=(12, 4))
+    if plot_enable == True:
+        # Plot Training & Validation Accuracy and Loss for Each Fold
+        plt.figure(figsize=(12, 4))
 
-    # Plot Accuracy
-    plt.subplot(1, 2, 1)
-    plt.plot(train_accuracies, label='Train Accuracy')
-    plt.plot(val_accuracies, label='Validation Accuracy')
-    plt.title(f'Model Accuracy - Fold {fold}')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.legend()
+        # Plot Accuracy
+        plt.subplot(1, 2, 1)
+        plt.plot(train_accuracies, label='Train Accuracy')
+        plt.plot(val_accuracies, label='Validation Accuracy')
+        plt.title(f'Model Accuracy - Fold {fold}')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
 
-    # Plot Loss
-    plt.subplot(1, 2, 2)
-    plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Validation Loss')
-    plt.title(f'Model Loss - Fold {fold}')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
+        # Plot Loss
+        plt.subplot(1, 2, 2)
+        plt.plot(train_losses, label='Train Loss')
+        plt.plot(val_losses, label='Validation Loss')
+        plt.title(f'Model Loss - Fold {fold}')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
 
-    plt.tight_layout()
-    plt.show()
+        plt.tight_layout()
+        plt.show()
 
 # After cross-validation, evaluate on the test set using the best model
 # Here, we'll use the model from the last fold as an example
@@ -206,18 +215,20 @@ test_accuracy /= len(test_loader.dataset)
 print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.4f}")
 
 
-def infer_and_update_polygons(model, data_dir, confidence_threshold=0.75): 
+
+def infer_and_update_polygons(model, data_dir, confidence_threshold=0.975):
     model.eval()
     model.to(device)
-    w_size = 128
-    transform = transforms.Compose([
-        transforms.Resize((w_size, w_size)),
-        transforms.ToTensor(),
-        # Note: ToTensor() scales pixel values to [0,1]
-    ])
 
-    window_size = w_size
-    stride = int(window_size / 2)  # Ensure stride is an integer
+    window_sizes = [48, 64, 80]  # Varying window sizes
+    strides = [int(ws * 0.25) for ws in window_sizes]  # 75% overlap for each window size
+
+    # Transformation function: resize all patches to 64x64
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),
+        transforms.ToTensor(),
+        # Include normalization if used during training
+    ])
 
     for folder in os.listdir(data_dir):
         if folder not in ['009']:
@@ -251,76 +262,86 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.75):
             confidence_scores = []
 
             with torch.no_grad():
-                for y in range(0, image_height - window_size + 1, stride):
-                    for x in range(0, image_width - window_size + 1, stride):
-                        total_windows += 1
-                        patch = input_image.crop((x, y, x + window_size, y + window_size))
-                        input_tensor = transform(patch).unsqueeze(0).to(device)
+                for window_size, stride in zip(window_sizes, strides):
+                    print(f"Processing window size: {window_size}, stride: {stride}")
+                    for y in range(0, image_height - window_size + 1, stride):
+                        for x in range(0, image_width - window_size + 1, stride):
+                            total_windows += 1
+                            patch = input_image.crop((x, y, x + window_size, y + window_size))
+                            # Resize patch to 64x64
+                            input_tensor = transform(patch).unsqueeze(0).to(device)
 
-                        outputs = model(input_tensor)
-                        predicted_probs = torch.softmax(outputs, dim=1)
-                        predicted_class = torch.argmax(predicted_probs, dim=1).item()
-                        confidence = predicted_probs[0, predicted_class].item()
+                            outputs = model(input_tensor)
+                            predicted_probs = torch.softmax(outputs, dim=1)
+                            predicted_class = torch.argmax(predicted_probs, dim=1).item()
+                            confidence = predicted_probs[0, predicted_class].item()
 
-                        class_counts[predicted_class] += 1
-                        confidence_scores.append(confidence)
+                            class_counts[predicted_class] += 1
+                            confidence_scores.append(confidence)
 
-                        # Uncomment the following line to see predictions for each window
-                        # print(f"Window at ({x}, {y}): Predicted Class = {predicted_class}, Confidence = {confidence:.4f}")
-
-                        if predicted_class == 1 and confidence > confidence_threshold:
-                            positive_predictions += 1
-                            print(f"Detected Positive Class at ({x}, {y}) with Confidence: {confidence:.4f}")
-                            detected_box = {
-                                "label": "detected",
-                                "polygon": [
-                                    {"x": x, "y": y},
-                                    {"x": x + window_size, "y": y},
-                                    {"x": x + window_size, "y": y + window_size},
-                                    {"x": x, "y": y + window_size}
-                                ],
-                                "confidence": confidence  # Include confidence in the detected box
-                            }
-                            detected_boxes.append(detected_box)
-
+                            if predicted_class == 1 and confidence > confidence_threshold:
+                                positive_predictions += 1
+                                print(f"Detected Positive Class at ({x}, {y}), Window Size: {window_size}, Confidence: {confidence:.4f}")
+                                detected_box = {
+                                    "label": "detected",
+                                    "polygon": [
+                                        {"x": x, "y": y},
+                                        {"x": x + window_size, "y": y},
+                                        {"x": x + window_size, "y": y + window_size},
+                                        {"x": x, "y": y + window_size}
+                                    ],
+                                    "confidence": confidence,
+                                    "window_size": window_size  # Include window size for reference
+                                }
+                                detected_boxes.append(detected_box)
+            def filter_detections(detections, min_size=20, aspect_ratio_range=(0.8, 1.2)):
+                filtered = []
+                for det in detections:
+                    width = det['polygon'][2]['x'] - det['polygon'][0]['x']
+                    height = det['polygon'][2]['y'] - det['polygon'][0]['y']
+                    if width >= min_size and height >= min_size:
+                        aspect_ratio = width / height
+                        if aspect_ratio_range[0] <= aspect_ratio <= aspect_ratio_range[1]:
+                            filtered.append(det)
+                return filtered
+            detected_boxes = filter_detections(detected_boxes)
             # Apply Non-Maximum Suppression (NMS)
-            def nms(boxes, iou_threshold=0.3):
+            def nms(boxes, iou_threshold=0.2):
                 if len(boxes) == 0:
                     return []
-                
-                boxes_np = np.array([[box['polygon'][0]['x'], box['polygon'][0]['y'], 
+
+                boxes_np = np.array([[box['polygon'][0]['x'], box['polygon'][0]['y'],
                                     box['polygon'][2]['x'], box['polygon'][2]['y'], box['confidence']] for box in boxes])
-                
+
                 x1 = boxes_np[:, 0]
                 y1 = boxes_np[:, 1]
                 x2 = boxes_np[:, 2]
                 y2 = boxes_np[:, 3]
                 scores = boxes_np[:, 4]
-                
+
                 areas = (x2 - x1) * (y2 - y1)
                 order = scores.argsort()[::-1]  # Sort boxes by confidence scores in descending order
-                
+
                 keep = []
                 while order.size > 0:
                     i = order[0]
                     keep.append(i)
-                    
+
                     xx1 = np.maximum(x1[i], x1[order[1:]])
                     yy1 = np.maximum(y1[i], y1[order[1:]])
                     xx2 = np.minimum(x2[i], x2[order[1:]])
                     yy2 = np.minimum(y2[i], y2[order[1:]])
-                    
+
                     w = np.maximum(0, xx2 - xx1)
                     h = np.maximum(0, yy2 - yy1)
-                    
+
                     inter = w * h
                     iou = inter / (areas[i] + areas[order[1:]] - inter)
-                    
+
                     inds = np.where(iou <= iou_threshold)[0]
                     order = order[inds + 1]
-                
-                return [boxes[idx] for idx in keep]
 
+                return [boxes[idx] for idx in keep]
 
             unique_boxes = nms(detected_boxes)
 
@@ -346,5 +367,34 @@ def infer_and_update_polygons(model, data_dir, confidence_threshold=0.75):
             else:
                 print("No confidence scores collected.")
 
+# Call the inference function with the updated confidence threshold
+delete_detected_labels(result_dir)
+infer_and_update_polygons(model, result_dir)
 
-infer_and_update_polygons(model, result_dir, confidence_threshold=0.5)
+from sklearn.metrics import classification_report
+
+def evaluate_model(model, data_loader):
+    model.eval()
+    y_true = []
+    y_pred = []
+    with torch.no_grad():
+        for inputs, labels in data_loader:
+            inputs = inputs.to(device)
+            outputs = model(inputs)
+            probs = torch.softmax(outputs, dim=1)[:, 1]  # Probability for class '1' (a)
+            preds = (probs > 0.5).cpu().numpy()
+            y_pred.extend(preds)
+            y_true.extend(labels.numpy())
+
+    print(classification_report(y_true, y_pred, digits=4))
+    
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_confusion_matrix(y_true, y_pred):
+    cm = confusion_matrix(y_true, y_pred)
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.show()
