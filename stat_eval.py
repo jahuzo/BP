@@ -8,6 +8,7 @@ from paths import *
 import json
 from shapely.geometry import Polygon
 
+hard_negative_enable = False
 
 def calculate_iou(polygon1_points, polygon2_points):
     """
@@ -95,13 +96,14 @@ def count_true_detections(json_file_path, threshold=0.3, false_positive_threshol
     print(f"Precision: {precision:.2f}%")
     print(f"Recall: {recall:.2f}%")
 
+    if hard_negative_enable == True:
     # Save blatant false positives back to the JSON file
-    data.extend(blatant_false_positives)
-    with open(json_file_path, 'w') as file:
-        json.dump(data, file, indent=4)
-    print(f"Blatant false positives saved to {json_file_path}")
-    
-    return precision, recall
+        data.extend(blatant_false_positives)
+        with open(json_file_path, 'w') as file:
+            json.dump(data, file, indent=4)
+        print(f"Blatant false positives saved to {json_file_path}")
+        
+        return precision, recall
 
 # Example usage
 json_file_path = os.path.join(result_dir, '009', 'polygons.json')    
